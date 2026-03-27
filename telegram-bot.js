@@ -9,7 +9,7 @@ const { uploadFile, deleteFile, getFileUrl } = require('./storage');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const { getUserSession, setUserSession, isPlanExpired, createSessionIfNotExists } = require('./sessions');
-const { initCreditsTable, addCredits, setCredits, getCredits, useCredits, calculateCreditCost } = require('./credits'); 
+const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits'); 
 
 // ✅ Helper: Extract user ID from a support message
 function extractUserIdFromSupportMessage(message) {
@@ -65,12 +65,6 @@ const ADMIN_IDS = [541812135, 7948746526, 5426162126];
 const PREMIUM_VOICES = ['Cassie', 'Ryan', 'Rachel', 'Missy', 'Amy', 'Patrick', 'Andre', 'Stan', 'Lance', 'Alice', 'Liz', 'Dave', 'Candice', 'Autumn', 'Desmond', 'Charlotte', 'Ace', 'Liam', 'Keisha', 'Kent', 'Daisy', 'Lucy', 'Linda', 'Jamal', 'Sydney', 'Sally', 'Violet', 'Rhihanon', 'Mark'];
 
 const APPROVAL_REQUIRED_USER = 6646033752;
-
-const plans = [
-  { label: "Starter – $25/month (1500 credits)", planName: "Starter", planCode: "PLN_416140knw3ctjk4", credits: 1500 },
-  { label: "Growth – $49/month (3000 credits)", planName: "Growth", planCode: "PLN_y1cut9m3uwa6tfc", credits: 3000 },
-  { label: "Pro – $119/month (6000 credits)", planName: "Pro", planCode: "PLN_sue4dhlbfal42in", credits: 6000 }
-];
 
 const userStates = new Map();
 const scriptTimeouts = new Map(); // Track timeout IDs for script buffering
@@ -306,25 +300,6 @@ async function tryDeductCredits(ctx, userData) {
   if (!result.success) return { success: false, reason: result.reason };
 
   return { success: true, creditCost, remaining: result.remaining };
-}
-
-async function resumeAfterPaymentFlow(ctx, userData) {
-  const deduction = await tryDeductCredits(ctx, userData);
-
-  if (!deduction.success) {
-    return ctx.reply(`❌ Could not resume video creation: ${deduction.reason}`);
-  }
-
-await confirmSubmission(
-  ctx,
-  `✅ Deducted ${deduction.creditCost} credit(s).\n💰 Remaining: ${deduction.remaining}\n\n🎬 Your video is being processed...`
-);
-
-// ✅ Submit job
-const submitted = await submitVideoJob(ctx, userData);
-if (!submitted) return;
-
-userStates.delete(ctx.chat.id);
 }
 
 function isAdmin(ctx) {
@@ -1300,7 +1275,6 @@ bot.telegram.setMyCommands([
   { command: 'start', description: 'Start or reset your session' },
   { command: 'demo', description: 'Watch tutorial on how to use Syinth' },
   { command: 'samples', description: 'View sample videos created with Syinth' },
-  { command: 'subscribe', description: 'View subscription plans' },
   { command: 'credits', description: 'Check your remaining credits' },
   { command: 'status', description: 'View your plan status and expiry' },
   { command: 'mydashboard', description: 'Open your personal dashboard' },
@@ -1308,10 +1282,33 @@ bot.telegram.setMyCommands([
 ]);
 
 bot.command(['credit', 'credits'], async (ctx) => {
-  const credits = await getCredits(ctx.chat.id);
-  ctx.reply(`💰 You have ${credits} credit(s) left.`);
+  const creditInfo = await getCredits(ctx.chat.id);
+  
+  if (creditInfo.isExpired) {
+    return ctx.reply(
+      '⏳ *Your credits have expired*\n\n' +
+      '💰 Expired Balance: ~~' + creditInfo.amount + '~~ credits\n\n' +
+      'Please contact admin to renew your credits.',
+      { parse_mode: 'Markdown' }
+    );
+  }
+  
+  if (!creditInfo.expiresAt) {
+    return ctx.reply(`💰 You have ${creditInfo.amount} credit(s) left.`);
+  }
+  
+  const expiryDate = new Date(creditInfo.expiresAt);
+  const daysLeft = Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
+  
+  ctx.reply(
+    `💰 *Your Credits*\n\n` +
+    `Balance: *${creditInfo.amount}* credit(s)\n` +
+    `Expires: *${expiryDate.toDateString()}*\n` +
+    `⏰ Days left: *${daysLeft}* day(s)\n\n` +
+    `Need more? Contact admin!`,
+    { parse_mode: 'Markdown' }
+  );
 });
-
 
 bot.on('callback_query', async (ctx) => {
   const callbackData = ctx.callbackQuery.data;
@@ -1644,34 +1641,6 @@ if (callbackData.startsWith('refetch_video_')) {
   }
 });
 
-bot.command('subscribe', async (ctx) => {
-  const planStatus = await isPlanExpired(ctx.chat.id);
-  const planOptions = plans.map(p => [p.label]);
-
-  if (planStatus.status === 'active') {
-    return ctx.reply('✅ Your plan is still active! You can continue using the bot.');
-  }
-
-  // ✅ Set subscribe flow flag so content flow fallback doesn't fire
-  const userData = userStates.get(ctx.chat.id) || {};
-  userData.inSubscribeFlow = true;
-  userStates.set(ctx.chat.id, userData);
-
-  if (planStatus.status === 'expired') {
-    return ctx.reply(
-      '⏳ Your plan has expired. Tap a plan below to renew:',
-      Markup.keyboard(planOptions).oneTime().resize()
-    );
-  }
-
-  if (planStatus.status === 'new') {
-    return ctx.reply(
-      '👋 Welcome! You don\'t have a plan yet. Please choose a plan to start:',
-      Markup.keyboard(planOptions).oneTime().resize()
-    );
-  }
-});
-
 bot.command('admin', (ctx) => {
   if (!isAdmin(ctx)) return;
   ctx.reply('🔐 Admin Panel Access Granted.\nYou’ll be notified of user submissions here.');
@@ -1682,68 +1651,50 @@ bot.command('approve', async (ctx) => {
 
   const parts = ctx.message.text.split(' ');
   if (parts.length !== 3) {
-    return ctx.reply('Usage: /approve <telegramId> <credits>');
+    return ctx.reply('Usage: /approve <telegramId> <credits>\n\nExample: /approve 123456789 500');
   }
 
   const telegramId = String(parts[1]);
   const credits = parseInt(parts[2]);
 
-  if (isNaN(credits)) {
-    return ctx.reply('Invalid credit amount.');
+  if (isNaN(credits) || credits <= 0) {
+    return ctx.reply('❌ Invalid credit amount. Must be a positive number.');
   }
 
   try {
-    // ✅ USE IDEMPOTENT VERSION with unique transaction ID
     const transactionId = `admin_${ctx.from.id}_${telegramId}_${Date.now()}`;
     
     const result = await setCredits(telegramId, credits, transactionId, 'admin_approval');
     
     if (result.alreadyProcessed) {
-      return ctx.reply(`⚠️ Credits already added to user ${telegramId} recently. No duplicate credits added.`);
+      return ctx.reply(`⚠️ Credits already added to user ${telegramId} recently.`);
     }
 
-    // 🔄 Clear session resume state after approval
-    const session = await getUserSession(telegramId);
-    if (session) {
-      const now = new Date();
-      const expiration = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
+    const expiryDate = new Date(result.expiresAt);
+    
+    // ✅ Notify admin
+    ctx.reply(
+      `✅ *Credits Approved*\n\n` +
+      `👤 User: ${telegramId}\n` +
+      `💰 Credits: ${credits}\n` +
+      `📅 Expires: ${expiryDate.toDateString()}\n` +
+      `⏰ Valid for: 30 days`,
+      { parse_mode: 'Markdown' }
+    );
 
-      await setUserSession(telegramId, {
-        ...session,
-        waitingForPayment: false,  
-        resumeAfterPayment: false,
-        resumeData: null,
-        credits,
-        plan: session?.plan || 'manual', // fallback
-        expiration: expiration.toISOString(),
-        paystackSubscriptionId: null // mark as manual
-      });
-    }
-
-    // ✅ Notify the admin
-    ctx.reply(`✅ Approved. Added ${credits} credits to user ${telegramId}.`);
-
-    // ✅ Notify the user
+    // ✅ Notify user
     try {
       await bot.telegram.sendMessage(
         telegramId,
-        `🎉 You've been credited with ${credits} credit${credits > 1 ? 's' : ''}! You can now continue your video creation.`
+        `🎉 *Credits Received!*\n\n` +
+        `💰 Amount: *${credits}* credits\n` +
+        `📅 Expires: *${expiryDate.toDateString()}*\n` +
+        `⏰ Valid for: *30 days*\n\n` +
+        `You can now create videos! Use /start to begin.`,
+        { parse_mode: 'Markdown' }
       );
     } catch (error) {
       ctx.reply(`⚠️ Could not notify user ${telegramId}. They may not have started the bot yet.`);
-    }
-
-    // 🔄 Auto-resume if the user had a pending submission
-    const resumeData = session?.resumeAfterPayment || session?.resumeData;
-    if (resumeData) {
-      // Create a lightweight context replacement
-      const fakeCtx = {
-        chat: { id: Number(telegramId) },
-        from: { id: Number(telegramId), username: 'user' },
-        reply: (text, extra) => bot.telegram.sendMessage(telegramId, text, extra),
-      };
-
-      await resumeAfterPaymentFlow(fakeCtx, resumeData);
     }
     
   } catch (error) {
@@ -1797,33 +1748,51 @@ bot.command('endsupport', async (ctx) => {
 });
 
 bot.command('status', async (ctx) => {
-  const credits = await getCredits(ctx.chat.id);
-  const session = await getUserSession(ctx.chat.id);
-  const expiry = session?.expiration
-    ? new Date(session.expiration).toLocaleDateString()
-    : 'No active plan';
+  const creditInfo = await getCredits(ctx.chat.id);
+  
+  let statusMsg = `🧾 *Your Status*\n\n`;
+  
+  if (creditInfo.isExpired) {
+    statusMsg += `💰 Credits: ~~${creditInfo.amount}~~ (Expired)\n`;
+    statusMsg += `📅 Expired on: ${new Date(creditInfo.expiresAt).toDateString()}\n\n`;
+    statusMsg += `⚠️ Please contact admin for renewal.`;
+  } else if (creditInfo.expiresAt) {
+    const expiryDate = new Date(creditInfo.expiresAt);
+    const daysLeft = Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
+    
+    statusMsg += `💰 Credits: *${creditInfo.amount}*\n`;
+    statusMsg += `📅 Expires: ${expiryDate.toDateString()}\n`;
+    statusMsg += `⏰ Days left: *${daysLeft}*`;
+  } else {
+    statusMsg += `💰 Credits: ${creditInfo.amount}\n`;
+    statusMsg += `📅 No expiration set`;
+  }
 
-  ctx.reply(`🧾 *Your Status:*\n\n💰 *Credits:* ${credits}\n📅 *Plan Expiry:* ${expiry}`, {
-    parse_mode: 'Markdown'
-  });
+  ctx.reply(statusMsg, { parse_mode: 'Markdown' });
 });
 
 bot.command('mydashboard', async (ctx) => {
-  // ✅ Ensure session exists
   await createSessionIfNotExists(ctx.chat.id);
 
-  const session = await getUserSession(ctx.chat.id);
-  const credits = await getCredits(ctx.chat.id);
-
-  const plan = session?.plan || 'No active plan';
-  const expiration = session?.expiration
-    ? new Date(session.expiration).toDateString()
-    : 'N/A';
+  const creditInfo = await getCredits(ctx.chat.id);
 
   let msg = `📊 *Your Dashboard*\n\n`;
-  msg += `💳 *Credits:* ${credits}\n`;
-  msg += `📦 *Plan:* ${plan}\n`;
-  msg += `⏳ *Plan Expires:* ${expiration}\n`;
+  
+  if (creditInfo.isExpired) {
+    msg += `💰 Credits: ~~${creditInfo.amount}~~ *(Expired)*\n`;
+    msg += `📅 Expired: ${new Date(creditInfo.expiresAt).toDateString()}\n\n`;
+    msg += `⚠️ Contact admin to renew`;
+  } else if (creditInfo.expiresAt) {
+    const expiryDate = new Date(creditInfo.expiresAt);
+    const daysLeft = Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
+    
+    msg += `💰 Credits: *${creditInfo.amount}*\n`;
+    msg += `📅 Expires: ${expiryDate.toDateString()}\n`;
+    msg += `⏰ Days Left: *${daysLeft} day(s)*\n`;
+  } else {
+    msg += `💰 Credits: ${creditInfo.amount}\n`;
+    msg += `📅 No expiration`;
+  }
 
   return ctx.replyWithMarkdown(msg, { disable_web_page_preview: true });
 });
@@ -2497,16 +2466,6 @@ bot.on('text', async (ctx) => {
   // ✅ Ignore certain admin commands
   if (message === '/admin' || message === '/credit') return;
 
-  // ✅ Resume after payment logic
-  if (session?.resumeAfterPayment && session?.waitingForPayment === false) {
-    const resumeData = session.resumeAfterPayment;
-    userStates.set(ctx.chat.id, resumeData);
-    await setUserSession(ctx.chat.id, { resumeAfterPayment: null });
-    await ctx.reply('✅ Payment confirmed! Resuming your video submission...');
-    await resumeAfterPaymentFlow(ctx, resumeData);
-    return;
-  }
-
   // ✅ Skip fallbacks for commands and payment-related messages
   const isPaymentMessage =
     plans.some(p => message === p.label) ||
@@ -2724,26 +2683,18 @@ if (userData.mediaType && !userData.mediaMode && ['Yes', 'No'].includes(message)
       const deduction = await tryDeductCredits(ctx, userData);
 
       if (!deduction.success) {
-        if (deduction.reason === 'insufficient_credits') {
-          setUserSession(ctx.chat.id, {
-            resumeAfterPayment: userData,
-            waitingForPayment: true
-          });
-          await ctx.reply(
-            `🚫 You need ${deduction.creditCost} credit(s) but only have ${deduction.currentCredits}.`,
-            { reply_markup: { remove_keyboard: true } }
-          );
-          return ctx.reply(
-            'Choose a plan to top-up:',
-            Markup.keyboard([
-              ['Starter – $25/month (1500 credits)'],
-              ['Growth – $49/month (3000 credits)'],
-              ['Pro – $119/month (6000 credits)']
-            ]).oneTime().resize()
-          );
-        }
-        return ctx.reply(`❌ ${deduction.reason}`);
-      }
+  await ctx.reply(
+    `❌ ${deduction.reason}\n\n` +
+    `💰 Required: ${deduction.creditCost} credits\n` +
+    `💳 You have: ${deduction.currentCredits} credits\n\n` +
+    `Please contact admin to get more credits: @YourAdminUsername`,
+    { reply_markup: { remove_keyboard: true } }
+  );
+  
+  // Clean up state
+  userStates.delete(ctx.chat.id);
+  return;
+}
 
       await confirmSubmission(
         ctx,
@@ -2878,101 +2829,6 @@ if (userData.mediaType && !userData.mediaMode && ['Yes', 'No'].includes(message)
     );
   }
 
-   // ✅ Plan selection
-  const selectedPlan = plans.find(plan => message === plan.label);
-  if (selectedPlan) {
-    userStates.set(ctx.chat.id, {
-      ...userData,
-      stage: 'choose_payment',
-      selectedPlan,
-      inSubscribeFlow: true,
-    });
-    return ctx.reply('How would you like to pay?',
-      Markup.keyboard([['💳 Pay with Card'], ['₿ Pay with Crypto']]).oneTime().resize()
-    );
-  } else if (userData.inSubscribeFlow && !userData.selectedPlan) {
-    // User is in subscribe flow but typed something instead of picking a plan
-    return ctx.reply(
-      '⚠️ Please choose a plan from the options:',
-      Markup.keyboard([
-        ['Starter – $25/month (1500 credits)'],
-        ['Growth – $49/month (3000 credits)'],
-        ['Pro – $119/month (6000 credits)']
-      ]).oneTime().resize()
-    );
-  }
-
-  // ✅ Card payment
-  if (message === '💳 Pay with Card') {
-    const user = userStates.get(ctx.chat.id);
-    if (!user?.selectedPlan) {
-      return ctx.reply('⚠️ Please select a plan first.');
-    }
-    const serverBaseUrl = process.env.SERVER_URL || 'https://yourdomain.com';
-    const paystackSubLink = `${serverBaseUrl}/paystack/subscribe/${user.selectedPlan.planCode}?tg=${ctx.chat.id}`;
-    return ctx.reply('💳 Click below to subscribe with Credit/Debit card:', {
-      reply_markup: {
-        inline_keyboard: [[
-          { text: `Subscribe to ${user.selectedPlan.label}`, url: paystackSubLink }
-        ]]
-      }
-    });
-  }
-
-  // ✅ Crypto payment
-  if (message === '₿ Pay with Crypto') {
-    const selectedPlan = userData?.selectedPlan;
-    if (!selectedPlan) {
-      return ctx.reply('⚠️ Please select a plan first.');
-    }
-    await setUserSession(ctx.chat.id, {
-      ...session,
-      expectingHash: true,
-      pendingPlan: selectedPlan.label,
-    });
-    const priceMatch = selectedPlan.label.match(/\$(\d+)/);
-    const priceText = priceMatch ? `$${priceMatch[1]}` : 'the plan amount';
-    return ctx.reply(
-      `🪙 Send *${priceText}* in **USDT (Polygon)** to this address:\n\n` +
-      '`0x79dCdaB27Ea9D53D47296357BBb0Aa9761Cf2Cbe`\n\n' +
-      '_Only USDT sent via the Polygon network is accepted. Using the wrong network may result in a permanent loss of funds, so please verify before sending._\n\n' +
-      'Reply with your transaction hash for confirmation.',
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ✅ Crypto hash submission
-  const latestSession = await getUserSession(ctx.chat.id);
-  if (latestSession?.expectingHash === true && !isInSupportMode) {
-    const hash = message.trim();
-    await setUserSession(ctx.chat.id, {
-      ...latestSession,
-      expectingHash: false,
-      cryptoHash: hash,
-    });
-    await ctx.reply('✅ Thanks! Your transaction hash has been received. An admin will verify it shortly.');
-    for (const adminId of ADMIN_IDS) {
-      await bot.telegram.sendMessage(adminId,
-        `💸 *New Crypto Payment Submission*\n\n` +
-        `👤 User: [${ctx.from.first_name}](tg://user?id=${ctx.from.id})\n` +
-        `🆔 Telegram ID: \`${ctx.from.id}\`\n` +
-        `📦 Plan: ${latestSession.pendingPlan || 'N/A'}\n` +
-        `🔗 Hash:\n\`${hash}\`\n\n` +
-        `Use /approve ${ctx.from.id} <credits> to approve.`,
-        { parse_mode: 'Markdown' }
-      );
-    }
-    return;
-  }
-
-  // ✅ Payment method fallback
-  if (userData.selectedPlan && !message.startsWith('/')) {
-    return ctx.reply(
-      '⚠️ Please choose a payment method:',
-      Markup.keyboard([['💳 Pay with Card'], ['₿ Pay with Crypto']]).oneTime().resize()
-    );
-  }
-
   // ✅ NEW: Media mode fallback
 if (userData.mediaType && !userData.mediaMode && !message.startsWith('/') && !isInSupportMode) {
   return ctx.reply(
@@ -3018,17 +2874,12 @@ if (userData.voice && !userData.mediaType && !message.startsWith('/') && !isInSu
 });
 
 module.exports = {
-  resumeAfterPaymentFlow,
   bot,
   calculateRegenerationCost,
   notifyScriptForReview,                       
   notifySegmentImageForReview,
   notifySegmentUploadRequest,
-  notifySegmentVideoForReview,  
   notifyAllImagesComplete,
-  notifyAllVideosComplete,     
   notifyAudioForReview,            
-  notifyVideoComplete,             
-  cleanupOrphanedFiles,
-  checkStorageHealth
+  notifyVideoComplete
 };
