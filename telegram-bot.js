@@ -8,7 +8,7 @@ const { uploadFile, deleteFile, getFileUrl } = require('./storage');
 
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const { getUserSession, setUserSession, isPlanExpired, createSessionIfNotExists } = require('./sessions');
+const { getUserSession, setUserSession, createSessionIfNotExists } = require('./sessions');
 const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits'); 
 
 // ✅ Helper: Extract user ID from a support message
@@ -1343,10 +1343,7 @@ bot.hears(['📰 Essay Styled Videos', '📋 Listicle Videos'], async (ctx) => {
 
 // ✅ NEW: Input mode handler using bot.hears()
 bot.hears(['📝 Script', '💡 Prompt'], async (ctx) => {
-  const planStatus = await isPlanExpired(ctx.chat.id);
-  if (planStatus.expired) {
-    return ctx.reply('⏳ Your plan has expired. Please renew to continue.');
-  }
+  const isPrompt = ctx.message.text.includes('Prompt');
 
   const isPrompt = ctx.message.text.includes('Prompt');
   const userData = userStates.get(ctx.chat.id) || {};
@@ -1373,7 +1370,7 @@ bot.command(['credit', 'credits'], async (ctx) => {
     return ctx.reply(
       '⏳ *Your credits have expired*\n\n' +
       '💰 Expired Balance: ~~' + creditInfo.amount + '~~ credits\n\n' +
-      'Please contact admin to renew your credits.',
+      'Please contact /support to renew your credits.',
       { parse_mode: 'Markdown' }
     );
   }
@@ -1390,7 +1387,7 @@ bot.command(['credit', 'credits'], async (ctx) => {
     `Balance: *${creditInfo.amount}* credit(s)\n` +
     `Expires: *${expiryDate.toDateString()}*\n` +
     `⏰ Days left: *${daysLeft}* day(s)\n\n` +
-    `Need more? Contact admin!`,
+    `Need more? Contact /support!`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -1840,7 +1837,7 @@ bot.command('status', async (ctx) => {
   if (creditInfo.isExpired) {
     statusMsg += `💰 Credits: ~~${creditInfo.amount}~~ (Expired)\n`;
     statusMsg += `📅 Expired on: ${new Date(creditInfo.expiresAt).toDateString()}\n\n`;
-    statusMsg += `⚠️ Please contact admin for renewal.`;
+    statusMsg += `⚠️ Please contact /support to top up your credits.`;
   } else if (creditInfo.expiresAt) {
     const expiryDate = new Date(creditInfo.expiresAt);
     const daysLeft = Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
@@ -1855,7 +1852,6 @@ bot.command('status', async (ctx) => {
 
   ctx.reply(statusMsg, { parse_mode: 'Markdown' });
 });
-
 bot.command('mydashboard', async (ctx) => {
   await createSessionIfNotExists(ctx.chat.id);
 
@@ -1866,7 +1862,7 @@ bot.command('mydashboard', async (ctx) => {
   if (creditInfo.isExpired) {
     msg += `💰 Credits: ~~${creditInfo.amount}~~ *(Expired)*\n`;
     msg += `📅 Expired: ${new Date(creditInfo.expiresAt).toDateString()}\n\n`;
-    msg += `⚠️ Contact admin to renew`;
+    msg += `⚠️ Contact /support to renew`;
   } else if (creditInfo.expiresAt) {
     const expiryDate = new Date(creditInfo.expiresAt);
     const daysLeft = Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24));
@@ -2772,7 +2768,7 @@ if (userData.mediaType && !userData.mediaMode && ['Yes', 'No'].includes(message)
     `❌ ${deduction.reason}\n\n` +
     `💰 Required: ${deduction.creditCost} credits\n` +
     `💳 You have: ${deduction.currentCredits} credits\n\n` +
-    `Please contact admin to get more credits: @YourAdminUsername`,
+    `Please contact /support to get more credits`,
     { reply_markup: { remove_keyboard: true } }
   );
   
@@ -2860,27 +2856,15 @@ if (userData.mediaType && !userData.mediaMode && ['Yes', 'No'].includes(message)
     await showCreditBreakdown(ctx, userData);
     const deduction = await tryDeductCredits(ctx, userData);
 
-    if (!deduction.success) {
-      if (deduction.reason === 'insufficient_credits') {
-        setUserSession(ctx.chat.id, {
-          resumeAfterPayment: userData,
-          waitingForPayment: true
-        });
-        await ctx.reply(
-          `🚫 You need ${deduction.creditCost} credit(s) but only have ${deduction.currentCredits}.`,
-          { reply_markup: { remove_keyboard: true } }
-        );
-        return ctx.reply(
-          'Choose a plan to top-up:',
-          Markup.keyboard([
-            ['Starter – $25/month (1500 credits)'],
-            ['Growth – $49/month (3000 credits)'],
-            ['Pro – $119/month (6000 credits)']
-          ]).oneTime().resize()
-        );
-      }
-      return ctx.reply(`❌ ${deduction.reason}`);
-    }
+if (!deduction.success) {
+  await ctx.reply(
+    `🚫 You need ${deduction.creditCost} credit(s) but only have ${deduction.currentCredits}.\n\n` +
+    `Please contact /support to top up your credits.`,
+    { reply_markup: { remove_keyboard: true } }
+  );
+  userStates.delete(ctx.chat.id);
+  return;
+}
 
     await confirmSubmission(
       ctx,
