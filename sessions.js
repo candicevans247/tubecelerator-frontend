@@ -1,3 +1,4 @@
+// sessions.js - No subscription plans, credit-only system
 const { Pool } = require('pg');
 
 const pool = new Pool({
@@ -30,8 +31,8 @@ async function setUserSession(telegramId, data) {
        VALUES ($1, $2, $3, $4, $5)`,
       [
         telegramId,
-        data.plan || null,
-        data.expiration ? new Date(data.expiration) : null,
+        null,
+        null,
         data.usage || 0,
         JSON.stringify(data)
       ]
@@ -44,8 +45,8 @@ async function setUserSession(telegramId, data) {
        WHERE telegram_id = $1`,
       [
         telegramId,
-        mergedData.plan || null,
-        mergedData.expiration ? new Date(mergedData.expiration) : null,
+        null,
+        null,
         mergedData.usage || 0,
         JSON.stringify(mergedData)
       ]
@@ -79,89 +80,14 @@ async function createSessionIfNotExists(telegramId, userData = {}) {
   }
 }
 
-// ✅ Check if plan is expired
-async function isPlanExpired(telegramId) {
-  const session = await getUserSession(telegramId);
-
-  if (!session) return { status: 'new', expired: false };
-  if (!session.plan || session.plan === 'free') return { status: 'new', expired: false };
-
-  const now = new Date();
-  const expiryDate = new Date(session.expiration);
-
-  if (isNaN(expiryDate)) return { status: 'active', expired: false };
-
-  if (expiryDate < now) {
-    const { resetCredits } = require('./credits');
-    try {
-      await resetCredits(telegramId, 'plan_expired');
-      console.log(`🔄 Credits reset to 0 for expired plan (user: ${telegramId})`);
-    } catch (error) {
-      console.error(`⚠️ Failed to reset credits for ${telegramId}:`, error.message);
-    }
-    return { status: 'expired', expired: true };
-  }
-
-  return { status: 'active', expired: false };
-}
-
-// ✅ Expire plans and reset credits
-async function expirePlansIfNeeded() {
-  const expired = await pool.query(`
-    SELECT telegram_id FROM sessions 
-    WHERE expiration < NOW() 
-    AND plan IS NOT NULL
-  `);
-
-  if (expired.rows.length === 0) return;
-
-  console.log(`🔄 Expiring ${expired.rows.length} plan(s)...`);
-
-  const { resetCredits } = require('./credits');
-
-  for (const row of expired.rows) {
-    try {
-      await resetCredits(row.telegram_id, 'plan_expired');
-
-      try {
-        const { bot } = require('./telegram-bot');
-        await bot.telegram.sendMessage(
-          row.telegram_id,
-          `⏳ *Your plan has expired.*\n\nYour credits have been reset to 0. Please subscribe to continue creating videos.`,
-          { parse_mode: 'Markdown' }
-        );
-      } catch (notifyErr) {
-        console.warn(`⚠️ Could not notify ${row.telegram_id}:`, notifyErr.message);
-      }
-
-    } catch (err) {
-      console.error(`❌ Failed to expire plan for ${row.telegram_id}:`, err.message);
-    }
-  }
-
-  await pool.query(`
-    UPDATE sessions 
-    SET plan = NULL, expiration = NULL 
-    WHERE expiration < NOW()
-  `);
-
-  console.log(`✅ Expired ${expired.rows.length} plan(s) and reset their credits`);
-}
-
-// ✅ Activate a plan
-async function activatePlan(telegramId, plan, durationDays = 30) {
-  const expiration = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000);
-  await setUserSession(telegramId, { plan, expiration: expiration.toISOString() });
-}
-
-// ✅ Track usage
+// ✅ Track usage (useful for analytics)
 async function trackUsage(telegramId, minutesUsed) {
   const session = await getUserSession(telegramId);
   const usage = (session?.usage || 0) + minutesUsed;
   await setUserSession(telegramId, { usage });
 }
 
-// ✅ Check if user is new (no session or no plan ever)
+// ✅ Check if user is new (no session ever created)
 async function isNewUser(telegramId) {
   const session = await getUserSession(telegramId);
   return !session;
@@ -177,10 +103,7 @@ module.exports = {
   setUserSession,
   getUserSession,
   createSessionIfNotExists,
-  isPlanExpired,
-  expirePlansIfNeeded,
-  activatePlan,
   trackUsage,
-  isNewUser,              
+  isNewUser,
   listAllSessions
 };
