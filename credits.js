@@ -1,22 +1,32 @@
-// credits.js (PostgreSQL version with auto table creation + idempotency)
+// credits.js - WITH 30-DAY EXPIRATION
 const { Pool } = require('pg');
-const { isPlanExpired } = require('./sessions');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// ✅ Auto-create credits table on startup
+// ✅ Auto-create credits table with expiration
 async function initCreditsTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credits (
       telegram_id BIGINT PRIMARY KEY,
-      credits DECIMAL(10,2) DEFAULT 0
+      credits DECIMAL(10,2) DEFAULT 0,
+      expires_at TIMESTAMP,
+      credited_at TIMESTAMP DEFAULT NOW()
     )
   `);
   
-  // ✅ NEW: Create transactions table to track operations
+  // Add expiration column if it doesn't exist (for existing tables)
+  try {
+    await pool.query(`ALTER TABLE credits ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE credits ADD COLUMN IF NOT EXISTS credited_at TIMESTAMP DEFAULT NOW()`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_credits_expiration ON credits(expires_at)`);
+  } catch (error) {
+    // Columns likely already exist
+  }
+  
+  // Create transactions table
   await pool.query(`
     CREATE TABLE IF NOT EXISTS credit_transactions (
       id SERIAL PRIMARY KEY,
@@ -34,65 +44,13 @@ async function initCreditsTable() {
 
 initCreditsTable();
 
-// ✅ ONLY idempotent version - prevents all duplicate issues
-async function addCredits(telegramId, count, transactionId = null, operationType = 'manual') {
-  telegramId = String(telegramId);
-  
-  // Generate transaction ID if not provided (for backward compatibility)
-  if (!transactionId) {
-    transactionId = `manual_${telegramId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
-
-  try {
-    // Start transaction
-    await pool.query('BEGIN');
-    
-    // Check if this transaction was already processed
-    const existing = await pool.query(
-      'SELECT * FROM credit_transactions WHERE telegram_id = $1 AND transaction_id = $2',
-      [telegramId, transactionId]
-    );
-    
-    if (existing.rows.length > 0) {
-      console.log(`✅ Transaction ${transactionId} already processed for ${telegramId} - skipping`);
-      await pool.query('ROLLBACK');
-      return { success: true, alreadyProcessed: true };
-    }
-    
-    // Add credits
-    await pool.query(`
-      INSERT INTO credits (telegram_id, credits)
-      VALUES ($1, $2)
-      ON CONFLICT (telegram_id) 
-      DO UPDATE SET credits = credits.credits + EXCLUDED.credits
-    `, [telegramId, count]);
-    
-    // Record this transaction to prevent duplicates
-    await pool.query(
-      'INSERT INTO credit_transactions (telegram_id, transaction_id, credits, operation_type) VALUES ($1, $2, $3, $4)',
-      [telegramId, transactionId, count, operationType]
-    );
-    
-    // Commit transaction
-    await pool.query('COMMIT');
-    
-    console.log(`✅ Credited ${count} to ${telegramId} (transaction: ${transactionId})`);
-    return { success: true, alreadyProcessed: false };
-    
-  } catch (error) {
-    await pool.query('ROLLBACK');
-    console.error(`❌ Error in addCredits:`, error);
-    throw error;
-  }
-}
-
-// ✅ NEW: Set credits to exact amount (for plan renewals)
-async function setCredits(telegramId, count, transactionId = null, operationType = 'renewal') {
+// ✅ UPDATED: Set credits with 30-day expiration
+async function setCredits(telegramId, count, transactionId = null, operationType = 'admin_grant') {
   telegramId = String(telegramId);
   
   // Generate transaction ID if not provided
   if (!transactionId) {
-    transactionId = `renewal_${telegramId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    transactionId = `admin_${telegramId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
   try {
@@ -110,13 +68,20 @@ async function setCredits(telegramId, count, transactionId = null, operationType
       return { success: true, alreadyProcessed: true };
     }
     
-    // ✅ SET credits to exact amount (not adding)
+    // ✅ NEW: Calculate 30-day expiration from now
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30); // 30 days from now
+    
+    // ✅ SET credits with expiration
     await pool.query(`
-      INSERT INTO credits (telegram_id, credits)
-      VALUES ($1, $2)
+      INSERT INTO credits (telegram_id, credits, expires_at, credited_at)
+      VALUES ($1, $2, $3, NOW())
       ON CONFLICT (telegram_id) 
-      DO UPDATE SET credits = EXCLUDED.credits
-    `, [telegramId, count]);
+      DO UPDATE SET 
+        credits = EXCLUDED.credits,
+        expires_at = EXCLUDED.expires_at,
+        credited_at = NOW()
+    `, [telegramId, count, expiresAt]);
     
     // Record transaction
     await pool.query(
@@ -126,8 +91,12 @@ async function setCredits(telegramId, count, transactionId = null, operationType
     
     await pool.query('COMMIT');
     
-    console.log(`✅ Set credits to ${count} for ${telegramId} (transaction: ${transactionId})`);
-    return { success: true, alreadyProcessed: false };
+    console.log(`✅ Set ${count} credits for ${telegramId} (expires: ${expiresAt.toDateString()}, transaction: ${transactionId})`);
+    return { 
+      success: true, 
+      alreadyProcessed: false,
+      expiresAt: expiresAt.toISOString()
+    };
     
   } catch (error) {
     await pool.query('ROLLBACK');
@@ -136,16 +105,73 @@ async function setCredits(telegramId, count, transactionId = null, operationType
   }
 }
 
-// ✅ NEW: Reset credits to zero (for expired plans)
-async function resetCredits(telegramId, reason = 'plan_expired') {
+// ✅ UPDATED: Add credits (adds to existing, extends expiration)
+async function addCredits(telegramId, count, transactionId = null, operationType = 'manual') {
+  telegramId = String(telegramId);
+  
+  if (!transactionId) {
+    transactionId = `add_${telegramId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  try {
+    await pool.query('BEGIN');
+    
+    const existing = await pool.query(
+      'SELECT * FROM credit_transactions WHERE telegram_id = $1 AND transaction_id = $2',
+      [telegramId, transactionId]
+    );
+    
+    if (existing.rows.length > 0) {
+      console.log(`✅ Transaction ${transactionId} already processed - skipping`);
+      await pool.query('ROLLBACK');
+      return { success: true, alreadyProcessed: true };
+    }
+    
+    // ✅ NEW: Extend expiration by 30 days from now
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+    
+    // Add credits and update expiration
+    await pool.query(`
+      INSERT INTO credits (telegram_id, credits, expires_at, credited_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (telegram_id) 
+      DO UPDATE SET 
+        credits = credits.credits + EXCLUDED.credits,
+        expires_at = EXCLUDED.expires_at,
+        credited_at = NOW()
+    `, [telegramId, count, expiresAt]);
+    
+    await pool.query(
+      'INSERT INTO credit_transactions (telegram_id, transaction_id, credits, operation_type) VALUES ($1, $2, $3, $4)',
+      [telegramId, transactionId, count, operationType]
+    );
+    
+    await pool.query('COMMIT');
+    
+    console.log(`✅ Added ${count} credits to ${telegramId} (expires: ${expiresAt.toDateString()})`);
+    return { 
+      success: true, 
+      alreadyProcessed: false,
+      expiresAt: expiresAt.toISOString()
+    };
+    
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    console.error(`❌ Error in addCredits:`, error);
+    throw error;
+  }
+}
+
+// ✅ NEW: Reset credits to zero (for expired credits)
+async function resetCredits(telegramId, reason = 'expired') {
   telegramId = String(telegramId);
   
   try {
     await pool.query(`
-      INSERT INTO credits (telegram_id, credits)
-      VALUES ($1, 0)
-      ON CONFLICT (telegram_id) 
-      DO UPDATE SET credits = 0
+      UPDATE credits 
+      SET credits = 0, expires_at = NULL 
+      WHERE telegram_id = $1
     `, [telegramId]);
     
     console.log(`✅ Reset credits to 0 for ${telegramId} (reason: ${reason})`);
@@ -157,43 +183,65 @@ async function resetCredits(telegramId, reason = 'plan_expired') {
   }
 }
 
-// Get current credits
+// ✅ UPDATED: Get credits with expiration info
 async function getCredits(telegramId) {
   telegramId = String(telegramId);
-  const res = await pool.query(`SELECT credits FROM credits WHERE telegram_id = $1`, [telegramId]);
-  return res.rows[0]?.credits || 0;
+  const res = await pool.query(`SELECT credits, expires_at FROM credits WHERE telegram_id = $1`, [telegramId]);
+  
+  if (res.rows.length === 0) {
+    return { amount: 0, expiresAt: null, isExpired: false };
+  }
+  
+  const credits = res.rows[0].credits || 0;
+  const expiresAt = res.rows[0].expires_at;
+  
+  // Check if expired
+  const isExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
+  
+  return {
+    amount: isExpired ? 0 : credits, // Return 0 if expired
+    expiresAt: expiresAt ? expiresAt : null,
+    isExpired
+  };
 }
 
-// Check if user has enough credits
-async function hasCredits(telegramId, needed = 1) {
-  const current = await getCredits(telegramId);
-  return current >= needed;
+// ✅ NEW: Check if credits are expired
+async function areCreditsExpired(telegramId) {
+  const creditInfo = await getCredits(telegramId);
+  return creditInfo.isExpired;
 }
 
-// ✅ IMPROVED: Use credits with atomic operation (prevents race conditions)
+// ✅ UPDATED: Use credits (checks expiration first)
 async function useCredits(telegramId, count = 1) {
   telegramId = String(telegramId);
 
   if (count === 0) {
-    const current = await getCredits(telegramId);
-    return { success: true, remaining: current };
+    const creditInfo = await getCredits(telegramId);
+    return { success: true, remaining: creditInfo.amount };
   }
 
-  const { expired } = await isPlanExpired(telegramId);
-  if (expired) {
-    return { success: false, reason: '⏳ Your plan has expired. Please renew to use credits.' };
+  // ✅ Check expiration first
+  const creditInfo = await getCredits(telegramId);
+  
+  if (creditInfo.isExpired) {
+    return { 
+      success: false, 
+      reason: '⏳ Your credits have expired. Please contact admin for renewal.' 
+    };
   }
 
-  // ✅ IMPROVED: Atomic update with check (prevents race conditions)
+  // ✅ Atomic update with expiration check
   const result = await pool.query(`
     UPDATE credits 
     SET credits = credits - $2 
-    WHERE telegram_id = $1 AND credits >= $2
+    WHERE telegram_id = $1 
+    AND credits >= $2
+    AND (expires_at IS NULL OR expires_at > NOW())
     RETURNING credits
   `, [telegramId, count]);
 
   if (result.rows.length === 0) {
-    return { success: false, reason: '❌ Not enough credits.' };
+    return { success: false, reason: '❌ Not enough credits or credits expired.' };
   }
 
   const remaining = result.rows[0].credits;
@@ -201,11 +249,34 @@ async function useCredits(telegramId, count = 1) {
   return { success: true, remaining };
 }
 
-// Calculate how many credits a video will cost
+// ✅ NEW: Auto-expire old credits (run periodically)
+async function expireOldCredits() {
+  try {
+    const result = await pool.query(`
+      UPDATE credits 
+      SET credits = 0 
+      WHERE expires_at < NOW() 
+      AND credits > 0
+      RETURNING telegram_id, credits
+    `);
+    
+    if (result.rows.length > 0) {
+      console.log(`⏳ Expired credits for ${result.rows.length} user(s)`);
+      return result.rows;
+    }
+    
+    return [];
+  } catch (error) {
+    console.error(`❌ Error expiring credits:`, error);
+    return [];
+  }
+}
+
+// Calculate credit cost (unchanged)
 function calculateCreditCost({ durationMinutes, isPremiumVoice }) {
   const duration = Math.max(0, Number(durationMinutes) || 0);
-  const baseRate = 10; // 10 credits per minute for basic voice
-  const premiumExtra = 5; // +5 credits per minute for premium voice
+  const baseRate = 10;
+  const premiumExtra = 5;
   
   const baseCost = duration * baseRate;
   const premiumCost = isPremiumVoice ? duration * premiumExtra : 0;
@@ -214,11 +285,12 @@ function calculateCreditCost({ durationMinutes, isPremiumVoice }) {
 }
 
 module.exports = {
-  addCredits,      // For bonuses/manual additions
-  setCredits,      // ✅ NEW: For plan renewals
-  resetCredits,    // ✅ NEW: For expiring plans
-  getCredits,
-  hasCredits,
-  useCredits,
+  setCredits,      // Set exact amount with 30-day expiration
+  addCredits,      // Add to existing with 30-day expiration
+  resetCredits,    // Reset to zero
+  getCredits,      // Get credits with expiration info
+  areCreditsExpired, // Check if expired
+  useCredits,      // Use credits (checks expiration)
+  expireOldCredits,  // Expire old credits
   calculateCreditCost
 };
