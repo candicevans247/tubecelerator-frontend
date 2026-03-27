@@ -478,6 +478,91 @@ bot.command('cancelquick', async (ctx) => {
   }
 });
 
+// ✅ Admin: Check user's credit expiration
+bot.command('checkuser', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 2) {
+    return ctx.reply('Usage: /checkuser <telegramId>');
+  }
+  
+  const telegramId = parts[1];
+  const creditInfo = await getCredits(telegramId);
+  
+  if (creditInfo.amount === 0 && !creditInfo.expiresAt) {
+    return ctx.reply(`📊 User ${telegramId} has no credits.`);
+  }
+  
+  const expiryDate = creditInfo.expiresAt ? new Date(creditInfo.expiresAt) : null;
+  const daysLeft = expiryDate ? Math.ceil((expiryDate - new Date()) / (1000 * 60 * 60 * 24)) : null;
+  
+  ctx.reply(
+    `📊 *User Credit Info*\n\n` +
+    `🆔 User: ${telegramId}\n` +
+    `💰 Credits: ${creditInfo.amount}\n` +
+    `📅 Expires: ${expiryDate ? expiryDate.toDateString() : 'Never'}\n` +
+    `⏰ Days Left: ${daysLeft !== null ? daysLeft : 'N/A'}\n` +
+    `❌ Expired: ${creditInfo.isExpired ? 'Yes' : 'No'}`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// ✅ Admin: Extend user credits by 30 days
+bot.command('extend', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 2) {
+    return ctx.reply('Usage: /extend <telegramId>\n\nExtends credits by 30 days from now.');
+  }
+  
+  const telegramId = parts[1];
+  
+  try {
+    const creditInfo = await getCredits(telegramId);
+    
+    if (creditInfo.amount === 0) {
+      return ctx.reply('❌ User has no credits to extend. Use /approve to grant credits first.');
+    }
+    
+    // Extend by 30 days from now
+    const newExpiry = new Date();
+    newExpiry.setDate(newExpiry.getDate() + 30);
+    
+    await pool.query(
+      'UPDATE credits SET expires_at = $1 WHERE telegram_id = $2',
+      [newExpiry, telegramId]
+    );
+    
+    ctx.reply(
+      `✅ *Credits Extended*\n\n` +
+      `👤 User: ${telegramId}\n` +
+      `💰 Balance: ${creditInfo.amount}\n` +
+      `📅 New Expiry: ${newExpiry.toDateString()}\n` +
+      `⏰ Valid for: 30 more days`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    // Notify user
+    try {
+      await bot.telegram.sendMessage(
+        telegramId,
+        `🎉 *Credits Extended!*\n\n` +
+        `Your credits have been extended by 30 days.\n\n` +
+        `📅 New Expiry: ${newExpiry.toDateString()}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (error) {
+      ctx.reply('⚠️ Could not notify user (they may not have started the bot)');
+    }
+    
+  } catch (error) {
+    console.error('Extend error:', error);
+    ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
+
 //admin tool to resend failed to-send video
 bot.command('resend', async (ctx) => {
   if (!isAdmin(ctx)) return;
