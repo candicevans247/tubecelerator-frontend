@@ -1312,7 +1312,7 @@ bot.start(async (ctx) => {
   });
 
   return ctx.reply(
-    'Welcome to Syinth! 🎬\n\nWhat type of video would you like to create?',
+    '🎬Choose your content flow.',
     Markup.keyboard([['📰 Essay Styled Videos'], ['📋 Listicle Videos']])
       .oneTime()
       .resize()
