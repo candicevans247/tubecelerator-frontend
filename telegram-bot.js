@@ -1344,8 +1344,6 @@ bot.hears(['📰 Essay Styled Videos', '📋 Listicle Videos'], async (ctx) => {
 // ✅ NEW: Input mode handler using bot.hears()
 bot.hears(['📝 Script', '💡 Prompt'], async (ctx) => {
   const isPrompt = ctx.message.text.includes('Prompt');
-
-  const isPrompt = ctx.message.text.includes('Prompt');
   const userData = userStates.get(ctx.chat.id) || {};
   userData.mode = isPrompt ? 'prompt' : 'script';
   userStates.set(ctx.chat.id, userData);
