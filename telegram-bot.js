@@ -2671,9 +2671,9 @@ if (!userData.voice && validVoiceButtons.includes(message)) {
   return ctx.reply(
     'What type of media would you like to use?',
     Markup.keyboard([
-      ['📸 Images Only'],
-      ['🎬 Videos Only 🚧'],
-      ['🎨 Images + Videos 🚧']
+      ['Images Only'],
+      ['Videos Only'],
+      ['Images + Videos']
     ]).oneTime().resize()
   );
 } else if (!userData.voice && userData.videotype) {
@@ -2697,40 +2697,25 @@ if (!userData.voice && validVoiceButtons.includes(message)) {
   }
 
  if (userData.voice && !userData.mediaType && [
-  '📸 Images Only', 
-  '🎬 Videos Only 🚧', 
-  '🎨 Images + Videos 🚧'
+  'Images Only',
+  'Videos Only',
+  'Images + Videos'
 ].includes(message)) {
-  
-  // 🚧 Block maintenance modes
-  if (message.includes('🚧')) {
-    return ctx.reply(
-      '🚧 *UNDER MAINTENANCE, CHECK BACK LATER*\n\n' +
-      'We\'re working hard to bring you celebrity videos!\n\n' +
-      'For now, please use:\n' +
-      '📸 *Images Only* - Fully functional\n\n' +
-      'Choose again:',
-      {
-        parse_mode: 'Markdown',
-        ...Markup.keyboard([
-          ['📸 Images Only'],
-          ['🎬 Videos Only 🚧'],
-          ['🎨 Images + Videos 🚧']
-        ]).oneTime().resize()
-      }
-    );
-  }
-  
-  // ✅ Images Only selected
-  if (message === '📸 Images Only') {
+
+  if (message === 'Images Only') {
     userData.mediaType = 'images';
-    userStates.set(ctx.chat.id, userData);
-    
-    return ctx.reply(
-      'Do you want to provide the media yourself?',
-      Markup.keyboard([['Yes'], ['No']]).oneTime().resize()
-    );
+  } else if (message === 'Videos Only') {
+    userData.mediaType = 'videos';
+  } else if (message === 'Images + Videos') {
+    userData.mediaType = 'mixed';
   }
+
+  userStates.set(ctx.chat.id, userData);
+
+  return ctx.reply(
+    'Do you want to provide the media yourself?',
+    Markup.keyboard([['Yes'], ['No']]).oneTime().resize()
+  );
 }
 
   // ✅ NEW: Handle media mode selection (Yes/No)
