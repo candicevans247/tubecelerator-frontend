@@ -258,7 +258,7 @@ for (const adminId of ADMIN_IDS) {
 
 async function showCreditBreakdown(ctx, userData) {
   const duration = userData.duration || 0;
-  const isPremium = PREMIUM_VOICES.includes(userData.voice);
+  const isPremium = PREMIUM_VOICES.includes();
   const baseCost = duration * 10; // 10 credits per min
   const premiumExtra = isPremium ? duration * 5 : 0; // +5 credits/min for premium
   const totalCost = baseCost + premiumExtra;
@@ -2894,9 +2894,9 @@ if (userData.voice && !userData.mediaType && !message.startsWith('/') && !isInSu
   return ctx.reply(
     '⚠️ Please choose a media type:',
     Markup.keyboard([
-      ['📸 Images Only'],
-      ['🎬 Videos Only 🚧'],
-      ['🎨 Images + Videos 🚧']
+      ['Images Only'],
+      ['Videos Only'],
+      ['Images + Videos']
     ]).oneTime().resize()
   );
 }
