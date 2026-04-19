@@ -2812,11 +2812,8 @@ bot.on('text', async (ctx) => {
   // ✅ Ignore certain admin commands
   if (message === '/admin' || message === '/credit') return;
 
-  // ✅ Skip fallbacks for commands and payment-related messages
-  const isPaymentMessage =
-    plans.some(p => message === p.label) ||
-    message === '💳 Pay with Card' ||
-    message === '₿ Pay with Crypto';
+  // ✅ Skip fallbacks for command messages
+if (message.startsWith('/')) return;
 
   // --- CAPTURE SCRIPT OR PROMPT ---
   if (userData.bufferingScript && userData.mode === 'script') {
@@ -3149,8 +3146,6 @@ if (userData.voice && !userData.mediaType && !message.startsWith('/') && !isInSu
     !userData.content_flow &&
     !message.startsWith('/') &&
     !isInSupportMode &&
-    !userData.inSubscribeFlow &&   // ✅ skip if user came from /subscribe
-    !userData.selectedPlan &&      // ✅ skip if user has already selected a plan
     Object.keys(userData).length > 0
   ) {
     return ctx.reply(
