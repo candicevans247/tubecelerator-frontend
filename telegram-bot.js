@@ -17,43 +17,43 @@ const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCos
 
 const voicePages = [
   {
-    title: '⚡ Basic Voices (Free)',
+    title: '⚡ Basic Voices',
     voices: ['Max', 'Ashley', 'Ava', 'Roger', 'Lora'],
     page: 0,
     isPremium: false
   },
   {
-    title: '⭐ Premium Voices - Set 1 (+5 credits/min)',
+    title: '⭐ Premium Voices - Set 1',
     voices: ['Cassie', 'Ryan', 'Rachel', 'Missy', 'Amy'],
     page: 1,
     isPremium: true
   },
   {
-    title: '⭐ Premium Voices - Set 2 (+5 credits/min)',
+    title: '⭐ Premium Voices - Set 2',
     voices: ['Patrick', 'Andre', 'Stan', 'Lance', 'Alice'],
     page: 2,
     isPremium: true
   },
   {
-    title: '⭐ Premium Voices - Set 3 (+5 credits/min)',
+    title: '⭐ Premium Voices - Set 3',
     voices: ['Liz', 'Dave', 'Candice', 'Autumn', 'Desmond'],
     page: 3,
     isPremium: true
   },
   {
-    title: '⭐ Premium Voices - Set 4 (+5 credits/min)',
+    title: '⭐ Premium Voices - Set 4',
     voices: ['Charlotte', 'Ace', 'Liam', 'Keisha', 'Kent'],
     page: 4,
     isPremium: true
   },
   {
-    title: '⭐ Premium Voices - Set 5 (+5 credits/min)',
+    title: '⭐ Premium Voices - Set 5',
     voices: ['Daisy', 'Lucy', 'Linda', 'Jamal', 'Sydney'],
     page: 5,
     isPremium: true
   },
   {
-    title: '⭐ Premium Voices - Set 6 (+5 credits/min)',
+    title: '⭐ Premium Voices - Set 6',
     voices: ['Sally', 'Violet', 'Rhihanon', 'Mark'],
     page: 6,
     isPremium: true
@@ -65,7 +65,7 @@ async function showVoicePage(ctx, pageNum = 0) {
   
   const premiumNote = page.isPremium 
     ? '\n\n💡 *Premium voices cost +5 credits per minute*' 
-    : '\n\n✨ *Free voices - no extra cost*';
+    : '\n\n✨ *Starter voices - no extra cost*';
   
   const keyboard = [];
   
@@ -127,27 +127,27 @@ async function showVoicePage(ctx, pageNum = 0) {
 
 const captionPages = [
   {
-    title: '🎵 Popular Styles',
+    title: 'Set 1',
     styles: ['Karaoke', 'Banger', 'Acid', 'Lovly', 'Marvel'],
     page: 0
   },
   {
-    title: '✨ Creative Styles',
+    title: 'Set 2',
     styles: ['Marker', 'Neon Pulse', 'Beasty', 'Crazy', 'Safari'],
     page: 1
   },
   {
-    title: '🌈 Colorful Styles',
+    title: 'Set 3',
     styles: ['Popline', 'Desert', 'Hook', 'Sky', 'Flamingo'],
     page: 2
   },
   {
-    title: '🎨 Artistic Styles',
+    title: 'Set 4',
     styles: ['Deep Diver B&W', 'New', 'Catchy', 'From', 'Classic'],
     page: 3
   },
   {
-    title: '👔 Professional Styles',
+    title: 'Set 5',
     styles: ['Classic Big', 'Old Money', 'Cinema', 'Midnight Serif', 'Aurora Ink'],
     page: 4
   }
