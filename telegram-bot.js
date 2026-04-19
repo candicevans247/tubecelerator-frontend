@@ -545,14 +545,36 @@ async function showCreditBreakdown(ctx, userData) {
 async function tryDeductCredits(ctx, userData) {
   const duration = userData.duration || 0;
   const isPremium = PREMIUM_VOICES.includes(userData.voice);
+  
+  // ✅ FIX: Ensure duration is valid before calculating
+  if (duration === 0 || !duration) {
+    console.error(`❌ Invalid duration for user ${ctx.chat.id}:`, userData);
+    return {
+      success: false,
+      reason: '❌ Invalid duration. Please restart with /start',
+      creditCost: 0,
+      currentCredits: 0
+    };
+  }
+  
   const creditCost = calculateCreditCost({ durationMinutes: duration, isPremiumVoice: isPremium });
 
-  const currentCredits = await getCredits(ctx.chat.id);
-
-  // ✅ Avoid 0 credit deductions looking broken
-  if (creditCost === 0) {
-    return { success: true, creditCost: 0, remaining: currentCredits };
+  // ✅ Double-check credit cost is valid
+  if (creditCost === 0 || isNaN(creditCost)) {
+    console.error(`❌ Invalid credit cost calculated for user ${ctx.chat.id}:`, { duration, isPremium, creditCost });
+    return {
+      success: false,
+      reason: '❌ Credit calculation error. Please contact /support',
+      creditCost: 0,
+      currentCredits: 0
+    };
   }
+
+  // ✅ FIX: Get credits properly
+  const creditInfo = await getCredits(ctx.chat.id);
+  const currentCredits = typeof creditInfo === 'object' ? creditInfo.amount : creditInfo;
+
+  console.log(`💰 Credit check for user ${ctx.chat.id}: has ${currentCredits}, needs ${creditCost}`);
 
   if (currentCredits < creditCost) {
     return {
