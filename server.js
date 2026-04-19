@@ -97,35 +97,6 @@ app.post('/notify/video-complete', async (req, res) => {
   }
 });
 
-// ✅ NEW: Periodic credit expiration check (runs every hour)
-setInterval(async () => {
-  try {
-    console.log('⏰ Running credit expiration check...');
-    const expired = await expireOldCredits();
-    
-    if (expired.length > 0) {
-      console.log(`⏳ Expired credits for ${expired.length} user(s)`);
-      
-      // ✅ Optional: Notify users their credits expired
-      for (const user of expired) {
-        try {
-          await bot.telegram.sendMessage(
-            user.telegram_id,
-            '⏳ *Credits Expired*\n\n' +
-            'Your credits have expired. Contact admin to renew:\n' +
-            '@YourAdminUsername',
-            { parse_mode: 'Markdown' }
-          );
-        } catch (error) {
-          console.error(`Failed to notify user ${user.telegram_id}:`, error.message);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Credit expiration check error:', error);
-  }
-}, 60 * 60 * 1000); // Every hour
-
 // --- Start Server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
