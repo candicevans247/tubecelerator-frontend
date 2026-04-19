@@ -11,6 +11,273 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const { getUserSession, setUserSession, createSessionIfNotExists } = require('./sessions');
 const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits'); 
 
+// ============================================
+// 🎤 VOICE SELECTION - PAGINATED
+// ============================================
+
+const voicePages = [
+  {
+    title: '⚡ Basic Voices (Free)',
+    voices: ['Max', 'Ashley', 'Ava', 'Roger', 'Lora'],
+    page: 0,
+    isPremium: false
+  },
+  {
+    title: '⭐ Premium Voices - Set 1 (+5 credits/min)',
+    voices: ['Cassie', 'Ryan', 'Rachel', 'Missy', 'Amy'],
+    page: 1,
+    isPremium: true
+  },
+  {
+    title: '⭐ Premium Voices - Set 2 (+5 credits/min)',
+    voices: ['Patrick', 'Andre', 'Stan', 'Lance', 'Alice'],
+    page: 2,
+    isPremium: true
+  },
+  {
+    title: '⭐ Premium Voices - Set 3 (+5 credits/min)',
+    voices: ['Liz', 'Dave', 'Candice', 'Autumn', 'Desmond'],
+    page: 3,
+    isPremium: true
+  },
+  {
+    title: '⭐ Premium Voices - Set 4 (+5 credits/min)',
+    voices: ['Charlotte', 'Ace', 'Liam', 'Keisha', 'Kent'],
+    page: 4,
+    isPremium: true
+  },
+  {
+    title: '⭐ Premium Voices - Set 5 (+5 credits/min)',
+    voices: ['Daisy', 'Lucy', 'Linda', 'Jamal', 'Sydney'],
+    page: 5,
+    isPremium: true
+  },
+  {
+    title: '⭐ Premium Voices - Set 6 (+5 credits/min)',
+    voices: ['Sally', 'Violet', 'Rhihanon', 'Mark'],
+    page: 6,
+    isPremium: true
+  }
+];
+
+async function showVoicePage(ctx, pageNum = 0) {
+  const page = voicePages[pageNum];
+  
+  const premiumNote = page.isPremium 
+    ? '\n\n💡 *Premium voices cost +5 credits per minute*' 
+    : '\n\n✨ *Free voices - no extra cost*';
+  
+  const keyboard = [];
+  
+  // Voice sample buttons (2 per row for better mobile UX)
+  for (let i = 0; i < page.voices.length; i += 2) {
+    const row = [];
+    
+    row.push({ 
+      text: `🔊 ${page.voices[i]}`, 
+      callback_data: `voice_sample_${page.voices[i]}` 
+    });
+    
+    if (page.voices[i + 1]) {
+      row.push({ 
+        text: `🔊 ${page.voices[i + 1]}`, 
+        callback_data: `voice_sample_${page.voices[i + 1]}` 
+      });
+    }
+    
+    keyboard.push(row);
+  }
+  
+  // Navigation buttons
+  const navRow = [];
+  if (pageNum > 0) {
+    navRow.push({ text: '◀️ Previous', callback_data: `voice_page_${pageNum - 1}` });
+  }
+  navRow.push({ text: `${pageNum + 1}/${voicePages.length}`, callback_data: 'noop' });
+  if (pageNum < voicePages.length - 1) {
+    navRow.push({ text: 'Next ▶️', callback_data: `voice_page_${pageNum + 1}` });
+  }
+  keyboard.push(navRow);
+  
+  const messageText = `🎤 *${page.title}*${premiumNote}\n\n` +
+    `Tap any voice below to hear a sample:`;
+  
+  // Check if this is an edit or new message
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(messageText, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: keyboard }
+      });
+    } catch (error) {
+      // Message hasn't changed, just answer callback
+      await ctx.answerCbQuery();
+    }
+  } else {
+    await ctx.reply(messageText, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: keyboard }
+    });
+  }
+}
+
+// ============================================
+// 🎬 CAPTION SELECTION - PAGINATED
+// ============================================
+
+const captionPages = [
+  {
+    title: '🎵 Popular Styles',
+    styles: ['Karaoke', 'Banger', 'Acid', 'Lovly', 'Marvel'],
+    page: 0
+  },
+  {
+    title: '✨ Creative Styles',
+    styles: ['Marker', 'Neon Pulse', 'Beasty', 'Crazy', 'Safari'],
+    page: 1
+  },
+  {
+    title: '🌈 Colorful Styles',
+    styles: ['Popline', 'Desert', 'Hook', 'Sky', 'Flamingo'],
+    page: 2
+  },
+  {
+    title: '🎨 Artistic Styles',
+    styles: ['Deep Diver B&W', 'New', 'Catchy', 'From', 'Classic'],
+    page: 3
+  },
+  {
+    title: '👔 Professional Styles',
+    styles: ['Classic Big', 'Old Money', 'Cinema', 'Midnight Serif', 'Aurora Ink'],
+    page: 4
+  }
+];
+
+async function showCaptionPage(ctx, pageNum = 0) {
+  const page = captionPages[pageNum];
+  
+  const keyboard = [];
+  
+  // Caption sample buttons (2 per row)
+  for (let i = 0; i < page.styles.length; i += 2) {
+    const row = [];
+    
+    row.push({ 
+      text: `📹 ${page.styles[i]}`, 
+      callback_data: `caption_sample_${page.styles[i].replace(/\s+/g, '_')}` 
+    });
+    
+    if (page.styles[i + 1]) {
+      row.push({ 
+        text: `📹 ${page.styles[i + 1]}`, 
+        callback_data: `caption_sample_${page.styles[i + 1].replace(/\s+/g, '_')}` 
+      });
+    }
+    
+    keyboard.push(row);
+  }
+  
+  // Navigation buttons
+  const navRow = [];
+  if (pageNum > 0) {
+    navRow.push({ text: '◀️ Previous', callback_data: `caption_page_${pageNum - 1}` });
+  }
+  navRow.push({ text: `${pageNum + 1}/${captionPages.length}`, callback_data: 'noop' });
+  if (pageNum < captionPages.length - 1) {
+    navRow.push({ text: 'Next ▶️', callback_data: `caption_page_${pageNum + 1}` });
+  }
+  keyboard.push(navRow);
+  
+  const messageText = `🎬 *${page.title}*\n\n` +
+    `Tap any style below to see a sample video:`;
+  
+  // Check if this is an edit or new message
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(messageText, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: keyboard }
+      });
+    } catch (error) {
+      await ctx.answerCbQuery();
+    }
+  } else {
+    await ctx.reply(messageText, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: keyboard }
+    });
+  }
+}
+
+// ============================================
+// 📱 CALLBACK HANDLERS
+// ============================================
+
+// Voice page navigation
+bot.action(/^voice_page_(\d+)$/, async (ctx) => {
+  const pageNum = parseInt(ctx.match[1]);
+  await ctx.answerCbQuery();
+  await showVoicePage(ctx, pageNum);
+});
+
+// Voice sample playback
+bot.action(/^voice_sample_(.+)$/, async (ctx) => {
+  const voiceName = ctx.match[1];
+  
+  await ctx.answerCbQuery('🎵 Loading sample...');
+  
+  try {
+    // Send the specific voice sample
+    await ctx.replyWithAudio(
+      { source: `./voice-samples/${voiceName}.mp3` },
+      { 
+        caption: `🎤 *${voiceName}* voice sample\n\n` +
+          `Like this voice? Select it from the keyboard below.`,
+        parse_mode: 'Markdown'
+      }
+    );
+  } catch (error) {
+    console.error(`Error sending voice sample ${voiceName}:`, error);
+    await ctx.reply(`⚠️ Could not load sample for ${voiceName}. Please try another.`);
+  }
+});
+
+// Caption page navigation
+bot.action(/^caption_page_(\d+)$/, async (ctx) => {
+  const pageNum = parseInt(ctx.match[1]);
+  await ctx.answerCbQuery();
+  await showCaptionPage(ctx, pageNum);
+});
+
+// Caption sample playback
+bot.action(/^caption_sample_(.+)$/, async (ctx) => {
+  const styleName = ctx.match[1].replace(/_/g, ' ');
+  
+  await ctx.answerCbQuery('📹 Loading sample...');
+  
+  try {
+    const fileName = styleName.toLowerCase().replace(/[^a-z0-9]/g, '') + '.mp4';
+    
+    await ctx.replyWithVideo(
+      { source: `./caption-samples/${fileName}` },
+      { 
+        caption: `📹 *${styleName}* caption style\n\n` +
+          `Like this style? Select it from the keyboard below.`,
+        parse_mode: 'Markdown',
+        supports_streaming: true
+      }
+    );
+  } catch (error) {
+    console.error(`Error sending caption sample ${styleName}:`, error);
+    await ctx.reply(`⚠️ Could not load sample for ${styleName}. Please try another.`);
+  }
+});
+
+// No-op handler for page counter
+bot.action('noop', async (ctx) => {
+  await ctx.answerCbQuery();
+});
+
 // ✅ Helper: Extract user ID from a support message
 function extractUserIdFromSupportMessage(message) {
   if (!message) return null;
@@ -2624,36 +2891,31 @@ if (!userData.duration && userData.inputText) {
 
   // ✅ Video type
   if (!userData.videotype && ['Shorts', 'Reels', 'Longform'].includes(message)) {
-    userData.videotype = message.toLowerCase();
-    userStates.set(ctx.chat.id, userData);
+  userData.videotype = message.toLowerCase();
+  userStates.set(ctx.chat.id, userData);
 
-    await ctx.reply('Choose a voice. Premium voices are marked with ⭐\n⭐ Premium voices cost +1 credit/min. Here are samples');
-
-    const voices = ['Max', 'Ashley', 'Ava', 'Roger', 'Lora', 'Cassie⭐', 'Ryan⭐', 'Rachel⭐', 'Missy⭐', 'Amy⭐', 'Patrick⭐', 'Andre⭐', 'Stan⭐', 'Lance⭐', 'Alice⭐', 'Liz⭐', 'Dave⭐', 'Candice⭐', 'Autumn⭐', 'Desmond⭐', 'Charlotte⭐', 'Ace⭐', 'Liam⭐', 'Keisha⭐', 'Kent⭐', 'Daisy⭐', 'Lucy⭐', 'Linda⭐', 'Jamal⭐', 'Sydney⭐', 'Sally⭐', 'Violet⭐', 'Rhihanon⭐', 'Mark⭐'];
-    for (const name of voices) {
-      const cleanName = name.replace('⭐', '').trim();
-      await ctx.replyWithAudio({ source: `./voice-samples/${cleanName}.mp3` }, {
-        caption: `🎤 ${name}`
-      });
-    }
-
-    return ctx.reply('Now choose your preferred voice:',
-      Markup.keyboard([
-        ['Max', 'Ashley', 'Ava'],
-        ['Roger', 'Lora', 'Cassie⭐'],
-        ['Ryan⭐', 'Rachel⭐', 'Missy⭐'],
-        ['Amy⭐', 'Patrick⭐', 'Andre⭐'],
-        ['Stan⭐', 'Lance⭐', 'Alice⭐'],
-        ['Liz⭐', 'Dave⭐', 'Candice⭐'],
-        ['Autumn⭐', 'Desmond⭐', 'Charlotte⭐'],
-        ['Ace⭐', 'Liam⭐', 'Keisha⭐'],
-        ['Kent⭐', 'Daisy⭐', 'Lucy⭐'],
-        ['Linda⭐', 'Jamal⭐', 'Sydney⭐'],
-        ['Sally⭐', 'Violet⭐', 'Rhihanon⭐'],
-        ['Mark⭐']
-      ]).oneTime().resize()
-    );
-  } else if (!userData.videotype && userData.inputText) {
+  // Show paginated voice browser
+  await showVoicePage(ctx, 0);
+  
+  // Then show selection keyboard
+  return ctx.reply(
+    '👆 Browse samples above, then choose your voice:',
+    Markup.keyboard([
+      ['Max', 'Ashley', 'Ava'],
+      ['Roger', 'Lora', 'Cassie⭐'],
+      ['Ryan⭐', 'Rachel⭐', 'Missy⭐'],
+      ['Amy⭐', 'Patrick⭐', 'Andre⭐'],
+      ['Stan⭐', 'Lance⭐', 'Alice⭐'],
+      ['Liz⭐', 'Dave⭐', 'Candice⭐'],
+      ['Autumn⭐', 'Desmond⭐', 'Charlotte⭐'],
+      ['Ace⭐', 'Liam⭐', 'Keisha⭐'],
+      ['Kent⭐', 'Daisy⭐', 'Lucy⭐'],
+      ['Linda⭐', 'Jamal⭐', 'Sydney⭐'],
+      ['Sally⭐', 'Violet⭐', 'Rhihanon⭐'],
+      ['Mark⭐']
+    ]).oneTime().resize()
+  );
+} else if (!userData.videotype && userData.inputText) {
     return ctx.reply(
       '⚠️ Please choose a video type from the options:',
       Markup.keyboard([['Shorts', 'Reels'], ['Longform']]).oneTime().resize()
@@ -2771,51 +3033,32 @@ if (userData.mediaType && !userData.mediaMode && ['Yes', 'No'].includes(message)
       return;
 
     } else {
-      userData.addCaptions = true;
-      userStates.set(ctx.chat.id, userData);
+  userData.addCaptions = true;
+  userStates.set(ctx.chat.id, userData);
 
-      await ctx.reply('🎬 Here are samples of each caption style:');
-
-      const captionStyles = [
-        'Karaoke', 'Banger', 'Acid', 'Lovly', 'Marvel', 'Marker',
-        'Neon Pulse', 'Beasty', 'Crazy', 'Safari', 'Popline', 'Desert',
-        'Hook', 'Sky', 'Flamingo', 'Deep Diver B&W', 'New', 'Catchy',
-        'From', 'Classic', 'Classic Big', 'Old Money', 'Cinema',
-        'Midnight Serif', 'Aurora Ink'
-      ];
-
-      for (const style of captionStyles) {
-        const fileName = style.toLowerCase().replace(/[^a-z0-9]/g, '') + '.mp4';
-        try {
-          await ctx.replyWithVideo(
-            { source: `./caption-samples/${fileName}` },
-            { caption: `📹 ${style}`, supports_streaming: true }
-          );
-        } catch (err) {
-          console.warn(`⚠️ Caption sample not found: ${fileName}`);
-          await ctx.reply(`📹 ${style}`);
-        }
-      }
-
-      return ctx.reply(
-        '👆 Now choose your preferred caption style:',
-        Markup.keyboard([
-          ['Karaoke',     'Banger'],
-          ['Acid',        'Lovly'],
-          ['Marvel',      'Marker'],
-          ['Neon Pulse',  'Beasty'],
-          ['Crazy',       'Safari'],
-          ['Popline',     'Desert'],
-          ['Hook',        'Sky'],
-          ['Flamingo',    'Deep Diver B&W'],
-          ['New',         'Catchy'],
-          ['From',        'Classic'],
-          ['Classic Big', 'Old Money'],
-          ['Cinema',      'Midnight Serif'],
-          ['Aurora Ink']
-        ]).oneTime().resize()
-      );
-    }
+  // Show paginated caption browser
+  await showCaptionPage(ctx, 0);
+  
+  // Then show selection keyboard
+  return ctx.reply(
+    '👆 Browse samples above, then choose your style:',
+    Markup.keyboard([
+      ['Karaoke',     'Banger'],
+      ['Acid',        'Lovly'],
+      ['Marvel',      'Marker'],
+      ['Neon Pulse',  'Beasty'],
+      ['Crazy',       'Safari'],
+      ['Popline',     'Desert'],
+      ['Hook',        'Sky'],
+      ['Flamingo',    'Deep Diver B&W'],
+      ['New',         'Catchy'],
+      ['From',        'Classic'],
+      ['Classic Big', 'Old Money'],
+      ['Cinema',      'Midnight Serif'],
+      ['Aurora Ink']
+    ]).oneTime().resize()
+  );
+}
   } else if (userData.mediaMode && !userData.hasOwnProperty('addCaptions')) {
     return ctx.reply(
       '⚠️ Please choose Yes or No:',
