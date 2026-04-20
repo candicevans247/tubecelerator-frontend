@@ -118,6 +118,26 @@ app.post('/notify/video-complete', async (req, res) => {
   }
 });
 
+// ✅ ADD THIS DEBUG ENDPOINT
+app.get('/debug/connections', (req, res) => {
+  const handles = process._getActiveHandles();
+  const requests = process._getActiveRequests();
+  
+  const handleTypes = {};
+  handles.forEach(h => {
+    const type = h.constructor.name;
+    handleTypes[type] = (handleTypes[type] || 0) + 1;
+  });
+  
+  res.json({
+    totalHandles: handles.length,
+    totalRequests: requests.length,
+    handleBreakdown: handleTypes,
+    uptime: process.uptime(),
+    memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
+  });
+});
+
 // --- Start Server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
