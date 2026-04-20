@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 require('dotenv').config();
 const axios = require('axios');
-const { Pool } = require('pg');
+const pool = require('./db');
 const fs = require('fs');
 const path = require('path');
 const { uploadFile, deleteFile, getFileUrl } = require('./storage');
@@ -317,11 +317,6 @@ function isSupportMessage(message) {
   const text = message?.text || message?.caption || '';
   return text.includes('🆘') && text.includes('Support Request');
 }
-
-// Database pool for job management
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
 
 // Worker service URL for server communication
 const WORKER_BASE_URL = process.env.WORKER_BASE_URL || 'https://your-worker.railway.app';
