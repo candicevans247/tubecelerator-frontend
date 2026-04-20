@@ -9,12 +9,33 @@ app.use(bodyParser.json());
 const { bot } = require('./telegram-bot');
 const { expireOldCredits } = require('./credits');
 
-// Launch bot
-bot.launch().then(() => {
-  console.log('🤖 Bot launched from server.js');
-}).catch((err) => {
-  console.error('❌ Bot failed to launch:', err);
-});
+// ✅ Use webhooks instead of polling (serverless-compatible)
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN;
+const WEBHOOK_PATH = '/telegram-webhook';
+
+if (WEBHOOK_DOMAIN) {
+  const webhookUrl = `https://${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`;
+  
+  console.log(`🔗 Setting up webhook: ${webhookUrl}`);
+  
+  bot.telegram.setWebhook(webhookUrl)
+    .then(() => {
+      console.log('✅ Webhook set successfully');
+    })
+    .catch((err) => {
+      console.error('❌ Failed to set webhook:', err);
+    });
+  
+  // Handle incoming webhook requests
+  app.use(bot.webhookCallback(WEBHOOK_PATH));
+  
+  console.log('🤖 Bot running in webhook mode (serverless)');
+} else {
+  console.warn('⚠️ WEBHOOK_DOMAIN not set, falling back to polling (not serverless)');
+  bot.launch().then(() => {
+    console.log('🤖 Bot launched in polling mode');
+  });
+}
 
 // --- Health Check Endpoint ---
 app.get('/', (req, res) => {
