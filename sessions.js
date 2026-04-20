@@ -1,10 +1,5 @@
 // sessions.js - No subscription plans, credit-only system
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
+const pool = require('./db');
 
 async function initSessionsTable() {
   await pool.query(`
