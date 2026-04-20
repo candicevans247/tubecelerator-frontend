@@ -1,10 +1,5 @@
 // credits.js - WITH 30-DAY EXPIRATION
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
+const pool = require('./db');
 
 // ✅ Auto-create credits table with expiration
 async function initCreditsTable() {
