@@ -518,6 +518,21 @@ for (const adminId of ADMIN_IDS) {
   }
 }
 
+async function wakeWorker(jobId, action) {
+  try {
+    await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+      jobId,
+      action,
+      timestamp: Date.now()
+    }, {
+      timeout: 5000
+    });
+    console.log(`✅ Worker woken for job ${jobId} (${action})`);
+  } catch (error) {
+    console.warn(`⚠️ Could not wake worker: ${error.message}`);
+  }
+}
+
 async function showCreditBreakdown(ctx, userData) {
   const duration = userData.duration || 0;
   const isPremium = PREMIUM_VOICES.includes();
@@ -589,6 +604,210 @@ async function tryDeductCredits(ctx, userData) {
 function isAdmin(ctx) {
   return ADMIN_IDS.includes(ctx.from.id);
 }
+
+// Force worker to process all pending jobs
+bot.command('process', async (ctx) => {
+  if (!isAdmin(ctx)) {
+    return ctx.reply('❌ Admin only command');
+  }
+  
+  const parts = ctx.message.text.split(' ');
+  
+  try {
+    if (parts.length === 1) {
+      // Process all jobs
+      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+        action: 'admin_manual_all',
+        timestamp: Date.now()
+      }, { timeout: 5000 });
+      
+      ctx.reply('✅ Worker woken up to process all pending jobs');
+      
+    } else {
+      // Process specific job
+      const jobId = parseInt(parts[1]);
+      
+      if (isNaN(jobId)) {
+        return ctx.reply('Usage: /process [jobId]\n\nExample: /process 5');
+      }
+      
+      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+        jobId,
+        action: 'admin_specific_job',
+        timestamp: Date.now()
+      }, { timeout: 5000 });
+      
+      ctx.reply(`✅ Worker processing job ${jobId}`);
+    }
+  } catch (error) {
+    ctx.reply(`❌ Failed to wake worker: ${error.message}`);
+  }
+});
+
+// Check job status
+bot.command('jobstatus', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 2) {
+    return ctx.reply('Usage: /jobstatus <jobId>\n\nExample: /jobstatus 5');
+  }
+  
+  const jobId = parseInt(parts[1]);
+  
+  try {
+    const result = await pool.query('SELECT * FROM jobs WHERE id = $1', [jobId]);
+    
+    if (result.rows.length === 0) {
+      return ctx.reply(`❌ Job ${jobId} not found`);
+    }
+    
+    const job = result.rows[0];
+    const segments = job.segments || [];
+    const segmentsWithImages = segments.filter(s => s.imageUrl || s.videoUrl).length;
+    
+    ctx.reply(
+      `📊 *Job ${jobId} Status*\n\n` +
+      `Status: \`${job.status}\`\n` +
+      `User: ${job.user_id}\n` +
+      `Type: ${job.videotype}\n` +
+      `Voice: ${job.voice}\n` +
+      `Flow: ${job.content_flow || 'news'}\n` +
+      `Media: ${job.media_type || 'images'} (${job.media_mode || 'auto'})\n` +
+      `Segments: ${segmentsWithImages}/${segments.length} complete\n` +
+      `Captions: ${job.add_captions ? `Yes (${job.caption_style})` : 'No'}\n\n` +
+      `Created: ${new Date(job.created_at).toLocaleString()}\n` +
+      `Updated: ${new Date(job.updated_at).toLocaleString()}\n\n` +
+      `${job.error_message ? `⚠️ Error: ${job.error_message}` : '✅ No errors'}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    ctx.reply(`❌ Database error: ${error.message}`);
+  }
+});
+
+// Change job status and wake worker
+bot.command('setstatus', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) {
+    return ctx.reply(
+      '⚙️ *Set Job Status*\n\n' +
+      'Usage: `/setstatus <jobId> <status>`\n\n' +
+      '*Valid statuses:*\n' +
+      '• `pending` - Start from scratch\n' +
+      '• `text_approved` - Skip to segmentation\n' +
+      '• `segments_ready` - Start media fetching\n' +
+      '• `image_segment_approved` - Continue images\n' +
+      '• `images_approved` - Skip to audio\n' +
+      '• `audio_approved` - Skip to video render\n' +
+      '• `captions_ready` - Burn captions\n\n' +
+      'Example: `/setstatus 5 text_approved`',
+      { parse_mode: 'Markdown' }
+    );
+  }
+  
+  const jobId = parseInt(parts[1]);
+  const newStatus = parts[2];
+  
+  const validStatuses = [
+    'pending', 'text_approved', 'segments_ready',
+    'image_segment_approved', 'video_segment_approved',
+    'images_approved', 'videos_approved', 'audio_approved',
+    'captions_ready'
+  ];
+  
+  if (isNaN(jobId)) {
+    return ctx.reply('❌ Invalid job ID. Must be a number.');
+  }
+  
+  if (!validStatuses.includes(newStatus)) {
+    return ctx.reply(
+      `❌ Invalid status.\n\nMust be one of:\n${validStatuses.join(', ')}`
+    );
+  }
+  
+  try {
+    // Check if job exists
+    const checkResult = await pool.query('SELECT id, status FROM jobs WHERE id = $1', [jobId]);
+    
+    if (checkResult.rows.length === 0) {
+      return ctx.reply(`❌ Job ${jobId} not found in database`);
+    }
+    
+    const oldStatus = checkResult.rows[0].status;
+    
+    // Update status
+    await pool.query(
+      `UPDATE jobs 
+       SET status = $1, 
+           error_message = NULL, 
+           retry_count = 0,
+           updated_at = NOW() 
+       WHERE id = $2`,
+      [newStatus, jobId]
+    );
+    
+    // Wake worker
+    await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+      jobId,
+      action: 'admin_status_change',
+      oldStatus,
+      newStatus,
+      timestamp: Date.now()
+    }, { timeout: 5000 });
+    
+    ctx.reply(
+      `✅ *Job ${jobId} Updated*\n\n` +
+      `Old status: \`${oldStatus}\`\n` +
+      `New status: \`${newStatus}\`\n\n` +
+      `🔔 Worker has been notified to process this job.`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    console.log(`✅ Admin ${ctx.from.id} changed job ${jobId} status: ${oldStatus} → ${newStatus}`);
+    
+  } catch (error) {
+    console.error('Error in /setstatus:', error);
+    ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
+
+// List all pending/stuck jobs
+bot.command('listjobs', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+  
+  try {
+    const result = await pool.query(
+      `SELECT id, user_id, status, videotype, 
+              EXTRACT(EPOCH FROM (NOW() - updated_at))/60 as minutes_ago
+       FROM jobs 
+       WHERE status NOT IN ('completed', 'error')
+       ORDER BY updated_at DESC 
+       LIMIT 10`
+    );
+    
+    if (result.rows.length === 0) {
+      return ctx.reply('✅ No pending jobs');
+    }
+    
+    let message = '📋 *Pending Jobs*\n\n';
+    
+    result.rows.forEach(job => {
+      const minsAgo = Math.round(job.minutes_ago);
+      message += `*Job ${job.id}*\n`;
+      message += `Status: \`${job.status}\`\n`;
+      message += `User: ${job.user_id}\n`;
+      message += `Updated: ${minsAgo}m ago\n\n`;
+    });
+    
+    ctx.reply(message, { parse_mode: 'Markdown' });
+    
+  } catch (error) {
+    ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
 
 // ✅ Admin command to replace segment media
 bot.command('replacemedia', async (ctx) => {
@@ -1684,7 +1903,9 @@ bot.on('callback_query', async (ctx) => {
   console.log('============================');
   
   try {
-    // ✅ NEW: Handle job approval
+    // ============================================
+    // 🔒 JOB APPROVAL (Admin Only)
+    // ============================================
     if (callbackData.startsWith('approve_job_')) {
       if (!isAdmin(ctx)) {
         return ctx.answerCbQuery('❌ Only admins can approve jobs', true);
@@ -1693,11 +1914,15 @@ bot.on('callback_query', async (ctx) => {
       const jobId = callbackData.replace('approve_job_', '');
       
       try {
-        // Update job status to 'pending' so worker can process it
-        const response = await axios.post(`${WORKER_BASE_URL}/approve-job`, { jobId: parseInt(jobId) });
+        const response = await axios.post(`${WORKER_BASE_URL}/approve-job`, { 
+          jobId: parseInt(jobId) 
+        });
         
         if (response.data.success) {
           const job = response.data.job;
+          
+          // ✅ WAKE WORKER AFTER APPROVAL
+          await wakeWorker(jobId, 'job_approved');
           
           await ctx.editMessageText(
             `✅ *VIDEO APPROVED*\n\n` +
@@ -1710,7 +1935,6 @@ bot.on('callback_query', async (ctx) => {
           
           await ctx.answerCbQuery('✅ Video approved! Processing started.');
           
-          // Notify user
           await bot.telegram.sendMessage(
             job.user_id,
             '✅ *Your video request has been approved!*\n\n' +
@@ -1730,22 +1954,24 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
     
-    // Handle individual segment approvals (4-part callback data)
+    // ============================================
+    // 🖼️ IMAGE SEGMENT APPROVAL
+    // ============================================
     if (callbackData.startsWith('approve_segment_')) {
       const [action, type, jobId, segmentIndex] = callbackData.split('_');
       
       console.log(`Approving segment ${segmentIndex} for job ${jobId}`);
       
       try {
-        // ✅ FIXED: Send both jobId AND segmentIndex
         const response = await axios.post(`${WORKER_BASE_URL}/approve-segment`, { 
           jobId: parseInt(jobId), 
           segmentIndex: parseInt(segmentIndex) 
         });
         
-        console.log('Segment approval response:', response.data);
-
         if (response.data.success) {
+          // ✅ WAKE WORKER AFTER APPROVAL
+          await wakeWorker(jobId, 'segment_approved');
+          
           await ctx.editMessageCaption(
             `✅ **Segment ${parseInt(segmentIndex) + 1} Approved!**\n\n` +
             ctx.callbackQuery.message.caption.split('\n\n').slice(1).join('\n\n') + 
@@ -1754,7 +1980,6 @@ bot.on('callback_query', async (ctx) => {
           );
           await ctx.answerCbQuery('Segment approved! Processing next...');
         } else {
-          console.error('Segment approval failed:', response.data);
           await ctx.answerCbQuery('Failed to approve segment', true);
         }
       } catch (error) {
@@ -1764,13 +1989,15 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
 
-    // Handle individual segment refetch (4-part callback data)
+    // ============================================
+    // 🔄 IMAGE SEGMENT REFETCH
+    // ============================================
     if (callbackData.startsWith('refetch_segment_')) {
       const [action, type, jobId, segmentIndex] = callbackData.split('_');
       
       console.log(`Refetching segment ${segmentIndex} for job ${jobId}`);
       
-      const creditCost = 1; // 1 credit per image refetch
+      const creditCost = 1;
       const currentCredits = await getCredits(ctx.chat.id);
       
       if (currentCredits < creditCost) {
@@ -1780,12 +2007,12 @@ bot.on('callback_query', async (ctx) => {
       await useCredits(ctx.chat.id, creditCost);
       
       try {
-        // ✅ Use worker endpoint
         const success = await triggerSegmentRefetch(parseInt(jobId), parseInt(segmentIndex));
         
-        console.log(`Refetch trigger result: ${success}`);
-        
         if (success) {
+          // ✅ WAKE WORKER AFTER REFETCH
+          await wakeWorker(jobId, 'segment_refetch');
+          
           await ctx.editMessageCaption(
             `🔄 **Refetching Image for Segment ${parseInt(segmentIndex) + 1}...**\n\n` +
             ctx.callbackQuery.message.caption.split('\n\n').slice(1).join('\n\n') + 
@@ -1804,7 +2031,9 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
 
-    // Handle individual segment upload (4-part callback data)
+    // ============================================
+    // 📤 IMAGE SEGMENT UPLOAD
+    // ============================================
     if (callbackData.startsWith('upload_segment_')) {
       const [action, type, jobId, segmentIndex] = callbackData.split('_');
       
@@ -1828,79 +2057,90 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
 
-    // ✅ NEW: Handle stock video segment approvals (4-part callback data)
-if (callbackData.startsWith('approve_video_')) {
-  const [action, type, jobId, segmentIndex] = callbackData.split('_');
-  const segIdx = parseInt(segmentIndex);
-  const jId = parseInt(jobId);
-  
-  console.log(`Approving video segment ${segIdx} for job ${jId}`);
-  
-  try {
-    const response = await axios.post(`${WORKER_BASE_URL}/approve-video-segment`, { 
-      jobId: jId, 
-      segmentIndex: segIdx
-    });
-
-    if (response.data.success) {
-      await ctx.editMessageCaption(
-        `✅ **Video Segment ${segIdx + 1} Approved!**\n\n` +
-        ctx.callbackQuery.message.caption.split('\n\n').slice(1).join('\n\n'),
-        { parse_mode: 'Markdown' }
-      );
-      await ctx.answerCbQuery('✅ Approved!');
-    } else {
-      await ctx.answerCbQuery('Failed to approve video', true);
-    }
-  } catch (error) {
-    console.error('Error approving video:', error.message);
-    await ctx.answerCbQuery('Error processing request', true);
-  }
-  return;
-}
-
-// ✅ NEW: Handle stock video refetch (4-part callback data)
-if (callbackData.startsWith('refetch_video_')) {
-  const [action, type, jobId, segmentIndex] = callbackData.split('_');
-  
-  console.log(`Refetching stock video for segment ${segmentIndex} in job ${jobId}`);
-  
-  const creditCost = 5; // 5 credits per video refetch (higher than images)
-  const currentCredits = await getCredits(ctx.chat.id);
-  
-  if (currentCredits < creditCost) {
-    return ctx.answerCbQuery(`Insufficient credits. Need ${creditCost}, have ${currentCredits}`, true);
-  }
-
-  await useCredits(ctx.chat.id, creditCost);
-  
-  try {
-    const response = await axios.post(`${WORKER_BASE_URL}/refetch-video-segment`, {
-      jobId: parseInt(jobId),
-      segmentIndex: parseInt(segmentIndex)
-    });
-    
-    console.log(`Video refetch trigger result:`, response.data);
-    
-    if (response.data.success) {
-      await ctx.editMessageCaption(
-        `🔄 **Refetching Stock Video for Segment ${parseInt(segmentIndex) + 1}...**\n\n` +
-        ctx.callbackQuery.message.caption.split('\n\n').slice(1).join('\n\n') + 
-        `\n\n*${creditCost} credits deducted*`,
-        { parse_mode: 'Markdown' }
-      );
+    // ============================================
+    // 🎬 VIDEO SEGMENT APPROVAL
+    // ============================================
+    if (callbackData.startsWith('approve_video_')) {
+      const [action, type, jobId, segmentIndex] = callbackData.split('_');
+      const segIdx = parseInt(segmentIndex);
+      const jId = parseInt(jobId);
       
-      await ctx.answerCbQuery(`Refetching video... ${creditCost} credits deducted`);
-    } else {
-      await ctx.answerCbQuery('Failed to trigger refetch', true);
+      console.log(`Approving video segment ${segIdx} for job ${jId}`);
+      
+      try {
+        const response = await axios.post(`${WORKER_BASE_URL}/approve-video-segment`, { 
+          jobId: jId, 
+          segmentIndex: segIdx
+        });
+
+        if (response.data.success) {
+          // ✅ WAKE WORKER AFTER APPROVAL
+          await wakeWorker(jId, 'video_segment_approved');
+          
+          await ctx.editMessageCaption(
+            `✅ **Video Segment ${segIdx + 1} Approved!**\n\n` +
+            ctx.callbackQuery.message.caption.split('\n\n').slice(1).join('\n\n'),
+            { parse_mode: 'Markdown' }
+          );
+          await ctx.answerCbQuery('✅ Approved!');
+        } else {
+          await ctx.answerCbQuery('Failed to approve video', true);
+        }
+      } catch (error) {
+        console.error('Error approving video:', error.message);
+        await ctx.answerCbQuery('Error processing request', true);
+      }
+      return;
     }
-  } catch (error) {
-    console.error('Error in refetch video segment:', error.message);
-    await ctx.answerCbQuery('Error processing request', true);
-  }
-  return;
-}
-    // Handle 3-part callback data (script and audio)
+
+    // ============================================
+    // 🔄 VIDEO SEGMENT REFETCH
+    // ============================================
+    if (callbackData.startsWith('refetch_video_')) {
+      const [action, type, jobId, segmentIndex] = callbackData.split('_');
+      
+      console.log(`Refetching stock video for segment ${segmentIndex} in job ${jobId}`);
+      
+      const creditCost = 5;
+      const currentCredits = await getCredits(ctx.chat.id);
+      
+      if (currentCredits < creditCost) {
+        return ctx.answerCbQuery(`Insufficient credits. Need ${creditCost}, have ${currentCredits}`, true);
+      }
+
+      await useCredits(ctx.chat.id, creditCost);
+      
+      try {
+        const response = await axios.post(`${WORKER_BASE_URL}/refetch-video-segment`, {
+          jobId: parseInt(jobId),
+          segmentIndex: parseInt(segmentIndex)
+        });
+        
+        if (response.data.success) {
+          // ✅ WAKE WORKER AFTER REFETCH
+          await wakeWorker(jobId, 'video_refetch');
+          
+          await ctx.editMessageCaption(
+            `🔄 **Refetching Stock Video for Segment ${parseInt(segmentIndex) + 1}...**\n\n` +
+            ctx.callbackQuery.message.caption.split('\n\n').slice(1).join('\n\n') + 
+            `\n\n*${creditCost} credits deducted*`,
+            { parse_mode: 'Markdown' }
+          );
+          
+          await ctx.answerCbQuery(`Refetching video... ${creditCost} credits deducted`);
+        } else {
+          await ctx.answerCbQuery('Failed to trigger refetch', true);
+        }
+      } catch (error) {
+        console.error('Error in refetch video segment:', error.message);
+        await ctx.answerCbQuery('Error processing request', true);
+      }
+      return;
+    }
+    
+    // ============================================
+    // 📝 SCRIPT & 🎵 AUDIO APPROVALS (3-part callbacks)
+    // ============================================
     const [action, type, jobId] = callbackData.split('_');
     
     console.log(`Processing ${action} ${type} for job ${jobId}`);
@@ -1911,13 +2151,14 @@ if (callbackData.startsWith('refetch_video_')) {
         
         try {
           const response = await axios.post(`${WORKER_BASE_URL}/approve-script`, { jobId });
-          console.log('Script approval response:', response.data);
           
           if (response.data.success) {
+            // ✅ WAKE WORKER AFTER APPROVAL
+            await wakeWorker(jobId, 'script_approved');
+            
             await safeEditMessage(ctx, '✅ Script approved! Moving to next stage...');
             await ctx.answerCbQuery('Script approved!');
           } else {
-            console.error('Script approval failed:', response.data);
             await ctx.answerCbQuery('Failed to approve script', true);
           }
         } catch (error) {
@@ -1930,13 +2171,14 @@ if (callbackData.startsWith('refetch_video_')) {
         
         try {
           const response = await axios.post(`${WORKER_BASE_URL}/approve-audio`, { jobId });
-          console.log('Audio approval response:', response.data);
           
           if (response.data.success) {
+            // ✅ WAKE WORKER AFTER APPROVAL
+            await wakeWorker(jobId, 'audio_approved');
+            
             await safeEditMessage(ctx, '✅ Audio approved! Moving to final video generation...');
             await ctx.answerCbQuery('Audio approved!');
           } else {
-            console.error('Audio approval failed:', response.data);
             await ctx.answerCbQuery('Failed to approve audio', true);
           }
         } catch (error) {
@@ -1967,12 +2209,12 @@ if (callbackData.startsWith('refetch_video_')) {
       let creditCost = 0;
 
       if (type === 'script') {
-  creditCost = 2; // Flat 2 credits for script regeneration
+        creditCost = 2;
       } else if (type === 'audio') {
-  const duration = jobInfo.duration || 1;
-  const isPremium = PREMIUM_VOICES.includes(jobInfo.voice);
-  creditCost = isPremium ? duration * 8 : duration * 5;
-}
+        const duration = jobInfo.duration || 1;
+        const isPremium = PREMIUM_VOICES.includes(jobInfo.voice);
+        creditCost = isPremium ? duration * 8 : duration * 5;
+      }
 
       const currentCredits = await getCredits(ctx.chat.id);
       if (currentCredits < creditCost) {
@@ -1984,9 +2226,11 @@ if (callbackData.startsWith('refetch_video_')) {
       
       try {
         const success = await triggerRegeneration(jobId, type);
-        console.log(`Regeneration trigger result: ${success}`);
 
         if (success) {
+          // ✅ WAKE WORKER AFTER REGENERATION
+          await wakeWorker(jobId, `${type}_regenerate`);
+          
           const message = type === 'script' ? 'Regenerating script...' : 'Regenerating audio...';
           await safeEditMessage(ctx, `🔄 ${message} (${creditCost} credits deducted)`);
           await ctx.answerCbQuery(`Regenerating... ${creditCost} credits deducted`);
