@@ -2651,7 +2651,7 @@ bot.on('video', async (ctx) => {
   );
 });
 
-// ✅ UPDATED: Photo handler with admin support reply
+// ✅ UPDATED: Photo handler with worker wake-up
 bot.on('photo', async (ctx) => {
   const userData = userStates.get(ctx.chat.id) || {};
 
@@ -2718,6 +2718,13 @@ bot.on('photo', async (ctx) => {
         source: 'admin_override'
       });
       
+      // ✅ WAKE WORKER
+      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+        jobId,
+        action: 'admin_media_replaced',
+        timestamp: Date.now()
+      });
+      
       // Send to user for approval
       const jobInfo = await getJobInfo(jobId);
       const segments = jobInfo?.segments || [];
@@ -2769,6 +2776,8 @@ bot.on('photo', async (ctx) => {
       const fileInfo = await ctx.telegram.getFile(fileId);
       const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
       
+      await ctx.reply('📥 Uploading your image...');
+      
       const response = await axios.get(fileUrl, { 
         responseType: 'arraybuffer',
         timeout: 30000,
@@ -2785,6 +2794,8 @@ bot.on('photo', async (ctx) => {
       const fileBuffer = Buffer.from(response.data);
       const uploadResult = await uploadFile(fileName, fileBuffer, `image/${fileExtension}`);
       
+      console.log(`✅ User uploaded image for job ${jobId}, segment ${segmentIndex}: ${uploadResult}`);
+      
       const updateResponse = await axios.post(`${WORKER_BASE_URL}/upload-segment-image`, {
         jobId,
         segmentIndex,
@@ -2794,8 +2805,18 @@ bot.on('photo', async (ctx) => {
       });
 
       if (updateResponse.data.success) {
+        // ✅ WAKE WORKER AFTER UPLOAD
+        await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+          jobId,
+          action: 'user_image_uploaded',
+          segmentIndex,
+          timestamp: Date.now()
+        });
+        
         delete userData.uploadingSegmentImage;
         userStates.set(ctx.chat.id, userData);
+        
+        console.log(`✅ Image uploaded and worker woken for job ${jobId}, segment ${segmentIndex}`);
         
         return ctx.reply(`✅ Image uploaded for segment ${segmentIndex + 1}! Moving to next segment...`);
       } else {
@@ -2846,7 +2867,6 @@ bot.on('photo', async (ctx) => {
     'If you want to create a video, please use /start to begin the process.'
   );
 });
-
 
 // SIMPLIFIED "DONE" HANDLER - Replace your existing bot.hears(/^done$/i, async (ctx) => { block with this:
 bot.hears(/^done$/i, async (ctx) => {
