@@ -1856,8 +1856,8 @@ bot.hears(['📝 Script', '💡 Prompt'], async (ctx) => {
 
 bot.telegram.setMyCommands([
   { command: 'start', description: 'Start or reset your session' },
-  { command: 'demo', description: 'Watch tutorial on how to use Syinth' },
-  { command: 'samples', description: 'View sample videos created with Syinth' },
+  { command: 'demo', description: 'Watch tutorial on how to use Tubecelerator' },
+  { command: 'samples', description: 'View sample videos created with Tubecelerator' },
   { command: 'credits', description: 'Check your remaining credits' },
   { command: 'status', description: 'View your plan status and expiry' },
   { command: 'mydashboard', description: 'Open your personal dashboard' },
@@ -2404,10 +2404,10 @@ bot.command('mydashboard', async (ctx) => {
   return ctx.replyWithMarkdown(msg, { disable_web_page_preview: true });
 });
 
-// samples command - Show sample videos created by Syinth
+// samples command - Show sample videos created by Tubecelerator
 bot.command('samples', async (ctx) => {
   try {
-    await ctx.reply('🎬 *Here are some videos created with Syinth:*', { parse_mode: 'Markdown' });
+    await ctx.reply('🎬 *Here are some videos created with Tubecelerator:*', { parse_mode: 'Markdown' });
     
     const samplesDir = path.join(__dirname, 'sample-videos');
     
@@ -2459,9 +2459,8 @@ bot.command('samples', async (ctx) => {
 // ✅ NEW: /demo command - Show tutorial video
 bot.command('demo', async (ctx) => {
   await ctx.reply(
-    '📚 *This is a step by step guide on how to generate videos using Syinth*\n\n' +
-    '▶️ Watch the full tutorial here:\nhttps://youtu.be/7Nf3poWtzxg\n\n' +
-    'Here are some use cases:\nhttps://youtube.com/@syinthofficial?si=4GuORiyXssU55LVD\n\n' +
+    '📚 *This is a step by step guide on how to generate videos using Tubecelerator*\n\n' +
+    '▶️ Watch the full tutorial here:\nhttps://youtu.be/aaZzVXXHiPY?si=aOOkhuz2JtP65UHi\n\n' +
     '✨ Ready to get started? Use /start\n' +
     '💬 Need help? Use /support',
     { 
