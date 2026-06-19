@@ -1,3 +1,4 @@
+// telegram-bot.js
 const { Telegraf, Markup } = require('telegraf');
 require('dotenv').config();
 const axios = require('axios');
@@ -12,122 +13,38 @@ const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCos
 
 // ─────────────────────────────────────────────
 // Voice definitions
-// Keys must match voiceMap keys in audio-robot.js
+// Friendly names → must match voiceMap keys
+// in audio-robot.js exactly
+// All 16 voices support style instruction prompting
+// via Gemini TTS — no tiered separation needed
 // ─────────────────────────────────────────────
 
-// Qwen voices that support style instructions
-// (qwen3-tts-instruct-flash compatible only)
-const QWEN_INSTRUCT_VOICES = new Set([
-  'Cherry', 'Serena', 'Ethan', 'Chelsie', 'Momo', 'Vivian',
-  'Moon', 'Maia', 'Kai', 'Nofish', 'Bella', 'EldricSage',
-  'Mia', 'Mochi', 'Bellona', 'Vincent', 'Bunny', 'Neil',
-  'Elias', 'Arthur', 'Nini', 'Seren', 'Pip', 'Stella',
-]);
+const FEMALE_VOICES = ['Luna', 'Aria', 'Zoe', 'Calla', 'Erin', 'Kore', 'Lucy', 'Leda', 'Sally', 'Violet'];
+const MALE_VOICES   = ['Rex', 'Dave', 'Marcus', 'Desmond', 'Puck', 'Finn'];
 
-function isQwenInstructVoice(voice) {
-  return QWEN_INSTRUCT_VOICES.has(voice);
-}
+// All valid voice keys — must match voiceMap in audio-robot.js
+const ALL_VOICES = [...FEMALE_VOICES, ...MALE_VOICES];
 
 // ============================================
 // 🎤 VOICE PAGES — paginated browser
-// No premium separation — all voices same cost
 // ============================================
 
 const voicePages = [
   {
-    title: '🎙️ Google Voices - Set 1',
-    voices: ['Liz', 'Dave', 'Candice', 'Autumn', 'Desmond'],
-    page: 0
+    title: '🎙️ Female Voices - Set 1',
+    voices: ['Luna', 'Aria', 'Zoe', 'Calla', 'Erin'],
+    page: 0,
   },
   {
-    title: '🎙️ Google Voices - Set 2',
-    voices: ['Charlotte', 'Ace', 'Liam', 'Keisha', 'Kent'],
-    page: 1
+    title: '🎙️ Female Voices - Set 2',
+    voices: ['Kore', 'Lucy', 'Leda', 'Sally', 'Violet'],
+    page: 1,
   },
   {
-    title: '🎙️ Google Voices - Set 3',
-    voices: ['Daisy', 'Lucy', 'Linda', 'Jamal', 'Sydney'],
-    page: 2
+    title: '🎙️ Male Voices',
+    voices: ['Rex', 'Dave', 'Marcus', 'Desmond', 'Puck', 'Finn'],
+    page: 2,
   },
-  {
-    title: '🎙️ Google Voices - Set 4',
-    voices: ['Sally', 'Violet', 'Rhihanon', 'Mark'],
-    page: 3
-  },
-  {
-    title: '✨ Qwen Voices - Female Set 1',
-    voices: ['Cherry', 'Serena', 'Maia', 'Vivian', 'Bella'],
-    page: 4
-  },
-  {
-    title: '✨ Qwen Voices - Female Set 2',
-    voices: ['Mia', 'Seren', 'Stella', 'Chelsie', 'Momo'],
-    page: 5
-  },
-  {
-    title: '✨ Qwen Voices - Female Set 3',
-    voices: ['Bellona', 'Bunny', 'Elias', 'Nini', 'Jennifer'],
-    page: 6
-  },
-  {
-    title: '✨ Qwen Voices - Female Set 4',
-    voices: ['Katerina', 'Sonrisa', 'Sohee', 'OnoAnna'],
-    page: 7
-  },
-  {
-    title: '✨ Qwen Voices - Male Set 1',
-    voices: ['Ethan', 'Moon', 'Kai', 'EldricSage', 'Mochi'],
-    page: 8
-  },
-  {
-    title: '✨ Qwen Voices - Male Set 2',
-    voices: ['Vincent', 'Neil', 'Arthur', 'Pip', 'Nofish'],
-    page: 9
-  },
-  {
-    title: '✨ Qwen Voices - Male Set 3',
-    voices: ['QwenRyan', 'Aiden', 'Bodega', 'Alek', 'Dolce'],
-    page: 10
-  },
-  {
-    title: '✨ Qwen Voices - Male Set 4',
-    voices: ['Lenn', 'Emilien', 'QwenAndre', 'RadioGol'],
-    page: 11
-  },
-  {
-    title: '🌍 Qwen Dialect Voices',
-    voices: ['Dylan', 'Eric', 'Jada', 'Li', 'Marcus'],
-    page: 12
-  },
-  {
-    title: '🌍 Qwen Dialect Voices - Set 2',
-    voices: ['Roy', 'Peter', 'Sunny', 'Rocky', 'Kiki'],
-    page: 13
-  },
-];
-
-// All valid voice keys — must match voiceMap in audio-robot.js
-const ALL_VOICES = [
-  // Google
-  'Liz', 'Dave', 'Candice', 'Autumn', 'Desmond',
-  'Charlotte', 'Ace', 'Liam', 'Keisha', 'Kent',
-  'Daisy', 'Lucy', 'Linda', 'Jamal', 'Sydney',
-  'Sally', 'Violet', 'Rhihanon', 'Mark',
-  // Qwen — instruct-compatible female
-  'Cherry', 'Serena', 'Maia', 'Vivian', 'Bella',
-  'Mia', 'Seren', 'Stella', 'Chelsie', 'Momo',
-  'Bellona', 'Bunny', 'Elias', 'Nini',
-  // Qwen — flash-only female
-  'Jennifer', 'Katerina', 'Sonrisa', 'Sohee', 'OnoAnna',
-  // Qwen — instruct-compatible male
-  'Ethan', 'Moon', 'Kai', 'EldricSage', 'Mochi',
-  'Vincent', 'Neil', 'Arthur', 'Pip', 'Nofish',
-  // Qwen — flash-only male
-  'QwenRyan', 'Aiden', 'Bodega', 'Alek', 'Dolce',
-  'Lenn', 'Emilien', 'QwenAndre', 'RadioGol',
-  // Qwen — dialect
-  'Dylan', 'Eric', 'Jada', 'Li', 'Marcus',
-  'Roy', 'Peter', 'Sunny', 'Rocky', 'Kiki',
 ];
 
 // Voice keyboard rows — 3 per row, auto-generated
@@ -170,7 +87,8 @@ async function showVoicePage(ctx, pageNum = 0) {
 
   const messageText =
     `🎤 *${page.title}*\n\n` +
-    `Tap any voice below to hear a sample:`;
+    `Tap any voice below to hear a sample.\n` +
+    `All voices support custom style instructions ✨`;
 
   if (ctx.callbackQuery) {
     try {
@@ -453,12 +371,11 @@ async function confirmSubmission(ctx, message, extra = {}) {
 
 // ============================================
 // 💰 CREDIT HELPERS
-// No premium separation — all voices same cost
 // ============================================
 
 async function showCreditBreakdown(ctx, userData) {
-  const duration  = userData.duration || 0;
-  const baseCost  = duration * 10; // 10 credits per minute flat for all voices
+  const duration = userData.duration || 0;
+  const baseCost = duration * 10; // 10 credits per minute flat for all voices
 
   await ctx.reply(
     `💰 *Credit Breakdown:*\n` +
@@ -484,7 +401,6 @@ async function tryDeductCredits(ctx, userData) {
     };
   }
 
-  // Flat rate — no premium voice surcharge
   const creditCost = calculateCreditCost({ durationMinutes: duration, isPremiumVoice: false });
 
   if (creditCost === 0 || isNaN(creditCost)) {
@@ -524,18 +440,18 @@ async function tryDeductCredits(ctx, userData) {
 async function submitVideoJob(ctx, userData) {
   try {
     const jobData = {
-      user_id:               ctx.chat.id,
-      prompt:                userData.mode === 'prompt' ? userData.inputText : null,
-      script:                userData.mode === 'script' ? userData.inputText : null,
-      videotype:             userData.videotype,
-      duration:              userData.duration,
-      voice:                 userData.voice,
-      content_flow:          userData.content_flow || 'news',
-      media_type:            userData.mediaType || 'images',
-      media_mode:            userData.mediaMode || 'auto',
-      add_captions:          userData.addCaptions || false,
-      caption_style:         userData.captionStyle || null,
-      qwen_style_instruction: userData.qwenStyleInstruction || null,
+      user_id:           ctx.chat.id,
+      prompt:            userData.mode === 'prompt' ? userData.inputText : null,
+      script:            userData.mode === 'script' ? userData.inputText : null,
+      videotype:         userData.videotype,
+      duration:          userData.duration,
+      voice:             userData.voice,
+      content_flow:      userData.content_flow || 'news',
+      media_type:        userData.mediaType || 'images',
+      media_mode:        userData.mediaMode || 'auto',
+      add_captions:      userData.addCaptions || false,
+      caption_style:     userData.captionStyle || null,
+      style_instruction: userData.styleInstruction || null, // ← renamed from qwen_style_instruction
     };
 
     const response = await axios.post(`${BACKEND_BASE_URL}/generate-video`, jobData);
@@ -988,13 +904,13 @@ bot.hears(['📝 Script', '💡 Prompt'], async (ctx) => {
 });
 
 bot.telegram.setMyCommands([
-  { command: 'start',       description: 'Start or reset your session'                     },
-  { command: 'demo',        description: 'Watch tutorial on how to use Tubecelerator'      },
-  { command: 'samples',     description: 'View sample videos'                              },
-  { command: 'credits',     description: 'Check your remaining credits'                    },
-  { command: 'status',      description: 'View your plan status and expiry'                },
-  { command: 'mydashboard', description: 'Open your personal dashboard'                    },
-  { command: 'support',     description: 'Contact support team'                            },
+  { command: 'start',       description: 'Start or reset your session'                },
+  { command: 'demo',        description: 'Watch tutorial on how to use Tubecelerator' },
+  { command: 'samples',     description: 'View sample videos'                         },
+  { command: 'credits',     description: 'Check your remaining credits'               },
+  { command: 'status',      description: 'View your plan status and expiry'           },
+  { command: 'mydashboard', description: 'Open your personal dashboard'               },
+  { command: 'support',     description: 'Contact support team'                       },
 ]);
 
 function isAdmin(ctx) {
@@ -1084,8 +1000,8 @@ bot.command('setstatus', async (ctx) => {
     'images_approved', 'videos_approved', 'audio_approved', 'captions_ready'
   ];
 
-  if (isNaN(jobId))                         return ctx.reply('❌ Invalid job ID.');
-  if (!validStatuses.includes(newStatus))   return ctx.reply(`❌ Invalid status.`);
+  if (isNaN(jobId))                       return ctx.reply('❌ Invalid job ID.');
+  if (!validStatuses.includes(newStatus)) return ctx.reply(`❌ Invalid status.`);
 
   try {
     const check = await pool.query('SELECT id, status FROM jobs WHERE id = $1', [jobId]);
@@ -1360,7 +1276,7 @@ bot.command('quickvideo', async (ctx) => {
   ctx.reply(
     '🚀 *Quick Video Generator*\n\nSend your config as JSON:\n\n' +
     '```json\n{\n  "script": "Your script",\n  "videotype": "longform",\n  "duration": 2,\n' +
-    '  "voice": "Cherry",\n  "content_flow": "news",\n  "media_type": "images",\n' +
+    '  "voice": "Aria",\n  "content_flow": "news",\n  "media_type": "images",\n' +
     '  "status": "segments_ready"\n}\n```',
     { parse_mode: 'Markdown' }
   );
@@ -1483,7 +1399,7 @@ bot.command('demo', async (ctx) => {
 });
 
 bot.command('support', async (ctx) => {
-  const userData      = userStates.get(ctx.chat.id) || {};
+  const userData       = userStates.get(ctx.chat.id) || {};
   userData.supportMode = true;
   userStates.set(ctx.chat.id, userData);
   await setUserSession(ctx.chat.id, { supportMode: true, expectingHash: false });
@@ -1531,7 +1447,7 @@ bot.command('startsupport', async (ctx) => {
   if (!/^\d+$/.test(targetId)) return ctx.reply('❌ Invalid Telegram ID.');
 
   try {
-    const userState      = userStates.get(Number(targetId)) || {};
+    const userState       = userStates.get(Number(targetId)) || {};
     userState.supportMode = true;
     userStates.set(Number(targetId), userState);
     await setUserSession(targetId, { supportMode: true, expectingHash: false });
@@ -1737,7 +1653,7 @@ bot.on('callback_query', async (ctx) => {
       }
 
     } else if (action === 'edit' && type === 'script') {
-      const userData      = userStates.get(ctx.chat.id) || {};
+      const userData         = userStates.get(ctx.chat.id) || {};
       userData.editingScript = jobId;
       userStates.set(ctx.chat.id, userData);
       await safeEditMessage(ctx, '✏️ Please send your edited script:');
@@ -1751,7 +1667,6 @@ bot.on('callback_query', async (ctx) => {
       if (type === 'script') {
         creditCost = 2;
       } else if (type === 'audio') {
-        // Flat rate — no premium voice surcharge
         creditCost = (jobInfo.duration || 1) * 5;
       }
 
@@ -1819,9 +1734,9 @@ bot.on('video', async (ctx) => {
       const video = ctx.message.video;
       if (video.file_size > 20 * 1024 * 1024) return ctx.reply(`❌ Video too large. Max: 20MB`);
 
-      const fileInfo = await ctx.telegram.getFile(video.file_id);
-      const fileUrl  = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
-      const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 120000 });
+      const fileInfo    = await ctx.telegram.getFile(video.file_id);
+      const fileUrl     = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+      const response    = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 120000 });
       const fileBuffer  = Buffer.from(response.data);
       const fileName    = `jobs/${jobId}/stock-videos/admin-${segmentIndex}.mp4`;
       const uploadedUrl = await uploadFile(fileName, fileBuffer, 'video/mp4');
@@ -1925,10 +1840,10 @@ bot.on('photo', async (ctx) => {
     try {
       await ctx.reply('📥 Processing your image...');
 
-      const photo    = ctx.message.photo[ctx.message.photo.length - 1];
-      const fileInfo = await ctx.telegram.getFile(photo.file_id);
-      const fileUrl  = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
-      const response = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 60000 });
+      const photo         = ctx.message.photo[ctx.message.photo.length - 1];
+      const fileInfo      = await ctx.telegram.getFile(photo.file_id);
+      const fileUrl       = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+      const response      = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 60000 });
       const fileBuffer    = Buffer.from(response.data);
       const fileExtension = fileInfo.file_path.split('.').pop() || 'jpg';
       const fileName      = `jobs/${jobId}/images/admin-${segmentIndex}.${fileExtension}`;
@@ -2080,7 +1995,7 @@ bot.on('text', async (ctx) => {
   }
 
   // ── Support mode ──────────────────────────────────────────────────
-  const session        = await getUserSession(ctx.chat.id);
+  const session         = await getUserSession(ctx.chat.id);
   const isInSupportMode = userData?.supportMode === true || session?.supportMode === true;
 
   if (isInSupportMode && !message.startsWith('/')) {
@@ -2112,7 +2027,7 @@ bot.on('text', async (ctx) => {
   // ── First script/prompt message ───────────────────────────────────
   if (!userData.inputText && userData.mode) {
     if (userData.mode === 'script') {
-      userData.scriptBuffer  = [message];
+      userData.scriptBuffer    = [message];
       userData.bufferingScript = true;
       userStates.set(ctx.chat.id, userData);
       setScriptTimeout(ctx, ctx.chat.id);
@@ -2177,31 +2092,25 @@ bot.on('text', async (ctx) => {
     userData.voice = message;
     userStates.set(ctx.chat.id, userData);
 
-    // Instruct-compatible Qwen voices → ask for style instruction
-    if (isQwenInstructVoice(message)) {
-      userData.awaitingQwenStyle = true;
-      userStates.set(ctx.chat.id, userData);
+    // ALL Gemini voices support style instructions — always ask
+    userData.awaitingStyleInstruction = true;
+    userStates.set(ctx.chat.id, userData);
 
-      return ctx.reply(
-        `🎤 *${message}* selected!\n\n` +
-        `You can optionally describe how you'd like the voice delivered.\n\n` +
-        `*Examples:*\n` +
-        `• _"Speak slowly and with gravitas"_\n` +
-        `• _"Energetic and fast-paced"_\n` +
-        `• _"Calm and soothing, like a documentary"_\n` +
-        `• _"Excited and enthusiastic"_\n\n` +
-        `Or tap *Skip* to use the default style.`,
-        {
-          parse_mode: 'Markdown',
-          ...Markup.keyboard([['⏭️ Skip Style']]).oneTime().resize()
-        }
-      );
-    }
-
-    // All other voices → straight to media type
     return ctx.reply(
-      'What type of media would you like to use?',
-      Markup.keyboard([['Images Only'], ['Videos Only'], ['Images + Videos']]).oneTime().resize()
+      `🎤 *${message}* selected!\n\n` +
+      `✨ All voices support custom delivery styles.\n\n` +
+      `Describe how you'd like the voice delivered:\n\n` +
+      `*Examples:*\n` +
+      `• _"Speak slowly and with gravitas"_\n` +
+      `• _"Energetic and fast-paced"_\n` +
+      `• _"Calm and soothing, like a documentary"_\n` +
+      `• _"Excited and enthusiastic"_\n` +
+      `• _"Authoritative news anchor tone"_\n\n` +
+      `Or tap *Skip* to use the default narration style.`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.keyboard([['⏭️ Skip Style']]).oneTime().resize()
+      }
     );
 
   } else if (!userData.voice && userData.videotype) {
@@ -2211,11 +2120,11 @@ bot.on('text', async (ctx) => {
     );
   }
 
-  // ── Qwen style instruction ────────────────────────────────────────
-  if (userData.voice && userData.awaitingQwenStyle) {
+  // ── Style instruction (all voices) ───────────────────────────────
+  if (userData.voice && userData.awaitingStyleInstruction) {
 
     if (message === '⏭️ Skip Style') {
-      userData.qwenStyleInstruction = null;
+      userData.styleInstruction = null;
     } else {
       if (message.startsWith('/')) {
         return ctx.reply(
@@ -2229,10 +2138,10 @@ bot.on('text', async (ctx) => {
           Markup.keyboard([['⏭️ Skip Style']]).oneTime().resize()
         );
       }
-      userData.qwenStyleInstruction = message.trim();
+      userData.styleInstruction = message.trim();
     }
 
-    delete userData.awaitingQwenStyle;
+    delete userData.awaitingStyleInstruction;
     userStates.set(ctx.chat.id, userData);
 
     return ctx.reply(
@@ -2434,7 +2343,7 @@ async function handleQuickVideoJSON(ctx, userData, message) {
       return ctx.reply('❌ duration must be a number between 1 and 30');
     }
     if (!ALL_VOICES.includes(config.voice)) {
-      return ctx.reply(`❌ Invalid voice. Must be one of the available voices.`);
+      return ctx.reply(`❌ Invalid voice. Valid voices: ${ALL_VOICES.join(', ')}`);
     }
 
     const validStatuses = ['text_approved', 'segments_ready', 'images_approved', 'videos_approved'];
@@ -2454,16 +2363,16 @@ async function handleQuickVideoJSON(ctx, userData, message) {
     }
 
     const jobData = {
-      user_id:      ctx.chat.id,
-      script:       config.script || '',
-      videotype:    config.videotype,
-      duration:     config.duration,
-      voice:        config.voice,
-      content_flow: config.content_flow || 'news',
-      media_type:   config.media_type   || 'images',
+      user_id:           ctx.chat.id,
+      script:            config.script || '',
+      videotype:         config.videotype,
+      duration:          config.duration,
+      voice:             config.voice,
+      content_flow:      config.content_flow  || 'news',
+      media_type:        config.media_type    || 'images',
       status,
-      segments:     config.segments     || null,
-      media_queries: config.media_queries || null
+      segments:          config.segments      || null,
+      media_queries:     config.media_queries || null,
     };
 
     await ctx.reply(
@@ -2485,7 +2394,7 @@ async function handleQuickVideoJSON(ctx, userData, message) {
         jobData.user_id, jobData.script, jobData.videotype, jobData.duration,
         jobData.voice, jobData.content_flow, jobData.media_type, jobData.status,
         jobData.segments      ? JSON.stringify(jobData.segments)      : null,
-        jobData.media_queries ? JSON.stringify(jobData.media_queries) : null
+        jobData.media_queries ? JSON.stringify(jobData.media_queries) : null,
       ]
     );
 
