@@ -42,16 +42,23 @@ app.get('/', (req, res) => {
   res.send('Syinth Telegram Bot is running 🚀');
 });
 
+// ============================================
 // HTTP ENDPOINTS FOR WORKER NOTIFICATIONS
+// ============================================
+
+// ✅ Import ALL notification functions — including the two new video ones
 const { 
   notifyScriptForReview, 
   notifySegmentImageForReview, 
   notifySegmentUploadRequest,
-  notifyAllImagesComplete, 
+  notifyAllImagesComplete,
+  notifySegmentVideoForReview,   
+  notifyAllVideosComplete,       
   notifyAudioForReview, 
   notifyVideoComplete 
 } = require('./telegram-bot');
 
+// ── Script review ─────────────────────────────────────────────────
 app.post('/notify/script-review', async (req, res) => {
   try {
     const { id, user_id, script } = req.body;
@@ -63,10 +70,21 @@ app.post('/notify/script-review', async (req, res) => {
   }
 });
 
+// ── Segment image review ──────────────────────────────────────────
 app.post('/notify/segment-image-review', async (req, res) => {
   try {
-    const { id, user_id, segmentIndex, totalSegments, segmentText, imageUrl, query } = req.body;
-    await notifySegmentImageForReview({ id, user_id, segmentIndex, totalSegments, segmentText, imageUrl, query });
+    const { 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, 
+      imageUrl, query 
+    } = req.body;
+
+    await notifySegmentImageForReview({ 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, 
+      imageUrl, query 
+    });
+
     res.json({ success: true, message: 'Segment image review notification sent' });
   } catch (error) {
     console.error('Segment image review notification error:', error);
@@ -74,10 +92,19 @@ app.post('/notify/segment-image-review', async (req, res) => {
   }
 });
 
+// ── Segment upload request ────────────────────────────────────────
 app.post('/notify/segment-upload-request', async (req, res) => {
   try {
-    const { id, user_id, segmentIndex, totalSegments, segmentText, query } = req.body;
-    await notifySegmentUploadRequest({ id, user_id, segmentIndex, totalSegments, segmentText, query });
+    const { 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, query 
+    } = req.body;
+
+    await notifySegmentUploadRequest({ 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, query 
+    });
+
     res.json({ success: true, message: 'Upload request notification sent' });
   } catch (error) {
     console.error('Upload request notification error:', error);
@@ -85,6 +112,7 @@ app.post('/notify/segment-upload-request', async (req, res) => {
   }
 });
 
+// ── All images complete ───────────────────────────────────────────
 app.post('/notify/images-complete', async (req, res) => {
   try {
     const { id, user_id } = req.body;
@@ -96,6 +124,43 @@ app.post('/notify/images-complete', async (req, res) => {
   }
 });
 
+// ── Segment VIDEO review ──────────────────────────────────────────
+// Called by worker when a stock video is fetched and needs user approval
+app.post('/notify/segment-video-review', async (req, res) => {
+  try {
+    const { 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, 
+      videoUrl, query 
+    } = req.body;
+
+    await notifySegmentVideoForReview({ 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, 
+      videoUrl, query 
+    });
+
+    res.json({ success: true, message: 'Segment video review notification sent' });
+  } catch (error) {
+    console.error('Segment video review notification error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ── All videos complete ───────────────────────────────────────────
+// Called by worker when all video segments are approved
+app.post('/notify/videos-complete', async (req, res) => {
+  try {
+    const { id, user_id } = req.body;
+    await notifyAllVideosComplete({ id, user_id });
+    res.json({ success: true, message: 'Videos complete notification sent' });
+  } catch (error) {
+    console.error('Videos complete notification error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ── Audio review ──────────────────────────────────────────────────
 app.post('/notify/audio-review', async (req, res) => {
   try {
     const { id, user_id, result_audio } = req.body;
@@ -107,6 +172,7 @@ app.post('/notify/audio-review', async (req, res) => {
   }
 });
 
+// ── Video complete ────────────────────────────────────────────────
 app.post('/notify/video-complete', async (req, res) => {
   try {
     const { id, user_id, result_video } = req.body;
