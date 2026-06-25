@@ -653,7 +653,10 @@ async function notifyAllImagesComplete({ id, user_id }) {
   }
 }
 
-async function notifySegmentVideoForReview({ id, user_id, segmentIndex, totalSegments, segmentText, videoUrl, query }) {
+async function notifySegmentVideoForReview({ 
+  id, user_id, segmentIndex, totalSegments, 
+  segmentText, videoUrl, query 
+}) {
   try {
     const response = await axios.get(videoUrl, {
       responseType: 'arraybuffer',
@@ -669,21 +672,38 @@ async function notifySegmentVideoForReview({ id, user_id, segmentIndex, totalSeg
       {
         caption:
           `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
-          `📝 *Text:* ${segmentText.substring(0, 150)}${segmentText.length > 150 ? '...' : ''}\n\n` +
+          `📝 *Text:* ${segmentText.substring(0, 150)}` +
+          `${segmentText.length > 150 ? '...' : ''}\n\n` +
           `❓ Is this video suitable?`,
         parse_mode: 'Markdown',
         supports_streaming: true,
         reply_markup: {
-          inline_keyboard: [[
-            { text: '✅ Approve', callback_data: `approve_video_${id}_${segmentIndex}` },
-            { text: '🔄 Refetch', callback_data: `refetch_video_${id}_${segmentIndex}` }
-          ]]
+          inline_keyboard: [
+            [
+              { 
+                text: '✅ Approve', 
+                callback_data: `approve_video_${id}_${segmentIndex}` 
+              },
+              { 
+                text: '🔄 Refetch', 
+                callback_data: `refetch_video_${id}_${segmentIndex}` 
+              }
+            ],
+            // ✅ NEW: Upload My Own button - mirrors image flow
+            [
+              { 
+                text: '📤 Upload My Own', 
+                callback_data: `upload_video_${id}_${segmentIndex}` 
+              }
+            ]
+          ]
         }
       }
     );
   } catch (error) {
     console.error(`❌ Failed to send stock video:`, error.message);
     try {
+      // Fallback: send as link with upload option
       await bot.telegram.sendMessage(
         user_id,
         `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
@@ -691,10 +711,24 @@ async function notifySegmentVideoForReview({ id, user_id, segmentIndex, totalSeg
         {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [[
-              { text: '✅ Approve', callback_data: `approve_video_${id}_${segmentIndex}` },
-              { text: '🔄 Refetch', callback_data: `refetch_video_${id}_${segmentIndex}` }
-            ]]
+            inline_keyboard: [
+              [
+                { 
+                  text: '✅ Approve', 
+                  callback_data: `approve_video_${id}_${segmentIndex}` 
+                },
+                { 
+                  text: '🔄 Refetch', 
+                  callback_data: `refetch_video_${id}_${segmentIndex}` 
+                }
+              ],
+              [
+                { 
+                  text: '📤 Upload My Own', 
+                  callback_data: `upload_video_${id}_${segmentIndex}` 
+                }
+              ]
+            ]
           }
         }
       );
@@ -1568,6 +1602,50 @@ bot.on('callback_query', async (ctx) => {
       return;
     }
 
+    // ── Video segment upload (user uploads their own video) ──────────
+if (callbackData.startsWith('upload_video_')) {
+  const parts        = callbackData.split('_');
+  // callback_data format: upload_video_{jobId}_{segmentIndex}
+  const jobId        = parts[2];
+  const segmentIndex = parts[3];
+
+  const userData = userStates.get(ctx.chat.id) || {};
+
+  // Store upload intent — bot.on('video') will read this
+  userData.uploadingSegmentVideo = { 
+    jobId, 
+    segmentIndex: parseInt(segmentIndex) 
+  };
+  userStates.set(ctx.chat.id, userData);
+
+  // Try to edit caption if it's a video message, else edit text
+  try {
+    await ctx.editMessageCaption(
+      `📤 *Upload Video for Segment ${parseInt(segmentIndex) + 1}*\n\n` +
+      `Please send your video clip now:\n\n` +
+      `📋 *Requirements:*\n` +
+      `• Max size: 50MB\n` +
+      `• Formats: MP4, MOV, AVI\n` +
+      `• Recommended: landscape for longform, portrait for shorts/reels`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (editError) {
+    // If editing fails (e.g. message is text), send new message
+    await ctx.reply(
+      `📤 *Upload Video for Segment ${parseInt(segmentIndex) + 1}*\n\n` +
+      `Please send your video clip now:\n\n` +
+      `📋 *Requirements:*\n` +
+      `• Max size: 50MB\n` +
+      `• Formats: MP4, MOV, AVI\n` +
+      `• Recommended: landscape for longform, portrait for shorts/reels`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  await ctx.answerCbQuery('Send your video clip now 📤');
+  return;
+}
+    
     // ── Video segment approval ────────────────────────────────────────
     if (callbackData.startsWith('approve_video_')) {
       const parts        = callbackData.split('_');
@@ -1706,6 +1784,7 @@ bot.on('callback_query', async (ctx) => {
 bot.on('video', async (ctx) => {
   const state = userStates.get(ctx.chat.id) || {};
 
+  // ── Priority 1: Admin replying to support message ───────────────
   if (isAdmin(ctx) && ctx.message.reply_to_message) {
     const repliedMessage = ctx.message.reply_to_message;
     if (isSupportMessage(repliedMessage)) {
@@ -1713,7 +1792,9 @@ bot.on('video', async (ctx) => {
       if (userId) {
         try {
           await bot.telegram.sendVideo(userId, ctx.message.video.file_id, {
-            caption: ctx.message.caption ? `💬 *Support Reply:*\n${ctx.message.caption}` : `💬 *Support Reply:* (Video)`,
+            caption: ctx.message.caption 
+              ? `💬 *Support Reply:*\n${ctx.message.caption}` 
+              : `💬 *Support Reply:* (Video)`,
             parse_mode: 'Markdown'
           });
           return ctx.reply('✅ Video sent to user.');
@@ -1724,43 +1805,67 @@ bot.on('video', async (ctx) => {
     }
   }
 
+  // ── Priority 2: Admin replacing media for a segment ────────────
   if (state?.adminReplacingMedia && isAdmin(ctx)) {
     const { jobId, segmentIndex, userId, mediaType } = state.adminReplacingMedia;
-    if (mediaType !== 'video') return ctx.reply('❌ This segment needs an image, not a video');
+    if (mediaType !== 'video') {
+      return ctx.reply('❌ This segment needs an image, not a video');
+    }
 
     try {
       await ctx.reply('📥 Processing your video...');
 
       const video = ctx.message.video;
-      if (video.file_size > 20 * 1024 * 1024) return ctx.reply(`❌ Video too large. Max: 20MB`);
+      if (video.file_size > 50 * 1024 * 1024) {
+        return ctx.reply(`❌ Video too large. Max: 50MB`);
+      }
 
       const fileInfo    = await ctx.telegram.getFile(video.file_id);
       const fileUrl     = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
-      const response    = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 120000 });
+      const response    = await axios.get(fileUrl, { 
+        responseType: 'arraybuffer', 
+        timeout: 120000 
+      });
       const fileBuffer  = Buffer.from(response.data);
       const fileName    = `jobs/${jobId}/stock-videos/admin-${segmentIndex}.mp4`;
       const uploadedUrl = await uploadFile(fileName, fileBuffer, 'video/mp4');
 
       await axios.post(`${WORKER_BASE_URL}/update-segment-media`, {
-        jobId, segmentIndex, mediaUrl: uploadedUrl, mediaType: 'video',
-        videoDuration: video.duration || 5, source: 'admin_override'
+        jobId, 
+        segmentIndex, 
+        mediaUrl: uploadedUrl, 
+        mediaType: 'video',
+        videoDuration: video.duration || 5, 
+        source: 'admin_override'
       });
 
-      const segments    = (await axios.get(`${WORKER_BASE_URL}/job-info/${jobId}`)).data.job.segments;
+      const jobInfo     = await getJobInfo(jobId);
+      const segments    = jobInfo?.segments || [];
       const segmentText = segments[segmentIndex]?.text || '';
 
       await bot.telegram.sendVideo(
         userId,
         { source: fileBuffer, filename: `admin_segment_${segmentIndex + 1}.mp4` },
         {
-          caption: `🎬 *Video for Segment ${segmentIndex + 1}/${segments.length}*\n\n📝 ${segmentText.substring(0, 150)}\n\n❓ Is this suitable?`,
+          caption: 
+            `🎬 *Video for Segment ${segmentIndex + 1}/${segments.length}*\n\n` +
+            `📝 ${segmentText.substring(0, 150)}\n\n` +
+            `❓ Is this suitable?`,
           parse_mode: 'Markdown',
           supports_streaming: true,
           reply_markup: {
-            inline_keyboard: [[
-              { text: '✅ Approve', callback_data: `approve_video_${jobId}_${segmentIndex}` },
-              { text: '🔄 Refetch', callback_data: `refetch_video_${jobId}_${segmentIndex}` }
-            ]]
+            inline_keyboard: [
+              [
+                { 
+                  text: '✅ Approve', 
+                  callback_data: `approve_video_${jobId}_${segmentIndex}` 
+                },
+                { 
+                  text: '🔄 Refetch', 
+                  callback_data: `refetch_video_${jobId}_${segmentIndex}` 
+                }
+              ]
+            ]
           }
         }
       );
@@ -1768,12 +1873,14 @@ bot.on('video', async (ctx) => {
       delete state.adminReplacingMedia;
       userStates.set(ctx.chat.id, state);
       return ctx.reply(`✅ Video sent to user for segment ${segmentIndex + 1}`);
+
     } catch (error) {
       console.error('Admin replace video error:', error);
       return ctx.reply('❌ Failed to process and send video');
     }
   }
 
+  // ── Priority 3: Admin sendvideo command ─────────────────────────
   if (state?.sendVideoTo) {
     const targetId = state.sendVideoTo;
     try {
@@ -1788,6 +1895,93 @@ bot.on('video', async (ctx) => {
     return;
   }
 
+  // ── Priority 4: USER uploading their own video for a segment ────
+  // This is the NEW path - triggered by upload_video_ callback
+  if (state?.uploadingSegmentVideo) {
+    const { jobId, segmentIndex } = state.uploadingSegmentVideo;
+
+    try {
+      // Validate job still exists
+      const jobInfo = await getJobInfo(jobId);
+      if (!jobInfo) {
+        return ctx.reply('❌ Job not found. Please restart with /start');
+      }
+
+      const video = ctx.message.video;
+
+      // Size check — Telegram bot API limit for uploads
+      if (video.file_size && video.file_size > 50 * 1024 * 1024) {
+        return ctx.reply(
+          '❌ Video too large. Maximum size is 50MB.\n\n' +
+          'Please compress your video and try again.'
+        );
+      }
+
+      await ctx.reply('📥 Uploading your video clip...');
+
+      // Download from Telegram
+      const fileInfo = await ctx.telegram.getFile(video.file_id);
+      const fileUrl  = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+
+      const response = await axios.get(fileUrl, { 
+        responseType: 'arraybuffer', 
+        timeout: 120000  // Videos can be large - give more time
+      });
+
+      const fileBuffer = Buffer.from(response.data);
+
+      // Determine extension from file path
+      const ext      = fileInfo.file_path.split('.').pop() || 'mp4';
+      const fileName = `jobs/${jobId}/user-videos/segment-${segmentIndex}.${ext}`;
+
+      // Upload to R2
+      const uploadedUrl = await uploadFile(fileName, fileBuffer, `video/${ext}`);
+
+      // Tell worker about it - uses new /upload-segment-video endpoint
+      const updateResponse = await axios.post(
+        `${WORKER_BASE_URL}/upload-segment-video`,
+        {
+          jobId,
+          segmentIndex,
+          videoUrl:     uploadedUrl,
+          fileName,
+          videoDuration: video.duration || 5,  // Telegram provides duration
+          source:       'user_upload'
+        }
+      );
+
+      if (updateResponse.data.success) {
+        // Wake worker to continue pipeline
+        await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+          jobId,
+          action:       'user_video_uploaded',
+          segmentIndex,
+          timestamp:    Date.now()
+        });
+
+        // Clear the upload state
+        delete state.uploadingSegmentVideo;
+        userStates.set(ctx.chat.id, state);
+
+        return ctx.reply(
+          `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
+          `Moving to next segment...`,
+          { parse_mode: 'Markdown' }
+        );
+      } else {
+        throw new Error(updateResponse.data.error || 'Failed to update segment');
+      }
+
+    } catch (error) {
+      console.error('Error uploading user segment video:', error);
+      return ctx.reply(
+        '❌ Failed to upload video. Please try again.\n\n' +
+        'If the problem persists, use /support'
+      );
+    }
+  }
+
+  // ── Priority 5: Support mode ─────────────────────────────────────
   const session = await getUserSession(ctx.chat.id);
   if (state?.supportMode || session?.supportMode) {
     const userInfo =
@@ -1808,7 +2002,11 @@ bot.on('video', async (ctx) => {
     }
   }
 
-  ctx.reply('🎥 Not expecting any uploads right now.\n\nUse /start to create a video.');
+  // ── Fallback ─────────────────────────────────────────────────────
+  ctx.reply(
+    '🎥 Not expecting any video uploads right now.\n\n' +
+    'Use /start to create a new video.'
+  );
 });
 
 bot.on('photo', async (ctx) => {
