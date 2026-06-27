@@ -2163,6 +2163,7 @@ bot.on('photo', async (ctx) => {
       const photo    = ctx.message.photo[ctx.message.photo.length - 1];
       const fileInfo = await ctx.telegram.getFile(photo.file_id);
       const fileUrl = getTelegramFileUrl(fileInfo.file_path);
+console.log(`📥 Downloading file from: ${fileUrl}`); // ← add this
 
       await ctx.reply('📥 Uploading your image...');
 
