@@ -15,6 +15,12 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 const { getUserSession, setUserSession, createSessionIfNotExists } = require('./sessions');
 const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits');
 
+
+function getTelegramFileUrl(filePath) {
+  const apiRoot = process.env.LOCAL_BOT_API_URL || 'https://api.telegram.org';
+  return `${apiRoot}/file/bot${process.env.BOT_TOKEN}/${filePath}`;
+}
+
 // ─────────────────────────────────────────────
 // Voice definitions
 // Friendly names → must match voiceMap keys
@@ -1887,7 +1893,7 @@ bot.on('video', async (ctx) => {
       }
 
       const fileInfo    = await ctx.telegram.getFile(video.file_id);
-      const fileUrl     = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+      const fileUrl = getTelegramFileUrl(fileInfo.file_path);
       const response    = await axios.get(fileUrl, { 
         responseType: 'arraybuffer', 
         timeout: 120000 
@@ -1976,9 +1982,9 @@ bot.on('video', async (ctx) => {
       const video = ctx.message.video;
 
       // Size check — Telegram bot API limit for uploads
-      if (video.file_size && video.file_size > 50 * 1024 * 1024) {
+      if (video.file_size && video.file_size > 100 * 1024 * 1024) {
         return ctx.reply(
-          '❌ Video too large. Maximum size is 50MB.\n\n' +
+          '❌ Video too large. Maximum size is 100MB.\n\n' +
           'Please compress your video and try again.'
         );
       }
@@ -1987,7 +1993,7 @@ bot.on('video', async (ctx) => {
 
       // Download from Telegram
       const fileInfo = await ctx.telegram.getFile(video.file_id);
-      const fileUrl  = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+      const fileUrl = getTelegramFileUrl(fileInfo.file_path);
 
       const response = await axios.get(fileUrl, { 
         responseType: 'arraybuffer', 
@@ -2106,7 +2112,7 @@ bot.on('photo', async (ctx) => {
 
       const photo         = ctx.message.photo[ctx.message.photo.length - 1];
       const fileInfo      = await ctx.telegram.getFile(photo.file_id);
-      const fileUrl       = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+      const fileUrl = getTelegramFileUrl(fileInfo.file_path);
       const response      = await axios.get(fileUrl, { responseType: 'arraybuffer', timeout: 60000 });
       const fileBuffer    = Buffer.from(response.data);
       const fileExtension = fileInfo.file_path.split('.').pop() || 'jpg';
@@ -2156,7 +2162,7 @@ bot.on('photo', async (ctx) => {
 
       const photo    = ctx.message.photo[ctx.message.photo.length - 1];
       const fileInfo = await ctx.telegram.getFile(photo.file_id);
-      const fileUrl  = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${fileInfo.file_path}`;
+      const fileUrl = getTelegramFileUrl(fileInfo.file_path);
 
       await ctx.reply('📥 Uploading your image...');
 
