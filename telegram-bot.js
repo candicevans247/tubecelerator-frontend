@@ -607,7 +607,38 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
       maxContentLength: 20 * 1024 * 1024
     });
 
-    const imageBuffer = Buffer.from(response.data);
+    let imageBuffer = Buffer.from(response.data);
+
+    // ── Resize if dimensions exceed Telegram's limit ──────────────────
+    // Telegram rejects photos where width + height > 10000
+    // or either side > 10000. Resize to safe dimensions before sending.
+    try {
+      const sharp = require('sharp');
+      const metadata = await sharp(imageBuffer).metadata();
+      const { width = 0, height = 0 } = metadata;
+
+      const needsResize =
+        width + height > 9000 ||   // leave headroom below 10000
+        width > 4500 ||
+        height > 4500;
+
+      if (needsResize) {
+        console.log(
+          `  📐 Resizing image (${width}x${height}) — exceeds Telegram limits`
+        );
+        imageBuffer = await sharp(imageBuffer)
+          .resize(1280, 1280, {
+            fit: 'inside',          // preserve aspect ratio
+            withoutEnlargement: true
+          })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+
+        console.log(`  ✅ Resized to fit within 1280x1280`);
+      }
+    } catch (resizeErr) {
+      console.warn(`  ⚠️ Could not resize image: ${resizeErr.message} — sending as-is`);
+    }
 
     await bot.telegram.sendPhoto(
       user_id,
@@ -634,7 +665,6 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
     throw error;
   }
 }
-
 async function notifySegmentUploadRequest({ id, user_id, segmentIndex, totalSegments, segmentText, query }) {
   try {
     await bot.telegram.sendMessage(
