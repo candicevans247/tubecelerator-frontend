@@ -18,7 +18,16 @@ const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCos
 
 function getTelegramFileUrl(filePath) {
   const apiRoot = process.env.LOCAL_BOT_API_URL || 'https://api.telegram.org';
-  return `${apiRoot}/file/bot${process.env.BOT_TOKEN}/${filePath}`;
+  
+  // In --local mode, file_path is an absolute local path like:
+  // /tmp/tgbotapi/photos/file_4.jpg
+  // The local server serves it at: {apiRoot}/file/bot{token}/{absolute_path}
+  // But absolute paths with leading slash need special handling
+  
+  // Strip leading slash if present to avoid double slash
+  const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+  
+  return `${apiRoot}/file/bot${process.env.BOT_TOKEN}/${cleanPath}`;
 }
 
 // ─────────────────────────────────────────────
