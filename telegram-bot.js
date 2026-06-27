@@ -7,29 +7,31 @@ const fs = require('fs');
 const path = require('path');
 const { uploadFile, deleteFile, getFileUrl } = require('./storage');
 
-const bot = new Telegraf(process.env.BOT_TOKEN, {
-  telegram: {
-    apiRoot: process.env.LOCAL_BOT_API_URL || 'https://api.telegram.org'
-  }
-});
+// Main bot — official API — handles ALL updates and file downloads
+const bot = new Telegraf(process.env.BOT_TOKEN);
+// No apiRoot here — uses api.telegram.org by default
+
+// Separate client — local API — ONLY for sending large files out
+const { Telegram } = require('telegraf');
+const localTelegram = process.env.LOCAL_BOT_API_URL
+  ? new Telegram(process.env.BOT_TOKEN, {
+      apiRoot: process.env.LOCAL_BOT_API_URL
+    })
+  : null;
+
+console.log(localTelegram
+  ? `📡 Large file sender: ${process.env.LOCAL_BOT_API_URL}`
+  : `📡 Large file sender: api.telegram.org (no local API configured)`
+);
+
 const { getUserSession, setUserSession, createSessionIfNotExists } = require('./sessions');
 const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits');
 
 
 function getTelegramFileUrl(filePath) {
-  const apiRoot = process.env.LOCAL_BOT_API_URL || 'https://api.telegram.org';
-  
-  // In --local mode, file_path is an absolute local path like:
-  // /tmp/tgbotapi/photos/file_4.jpg
-  // The local server serves it at: {apiRoot}/file/bot{token}/{absolute_path}
-  // But absolute paths with leading slash need special handling
-  
-  // Strip leading slash if present to avoid double slash
-  const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
-  
-  return `${apiRoot}/file/bot${process.env.BOT_TOKEN}/${cleanPath}`;
+  // Always official API for downloads — local server is send-only
+  return `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${filePath}`;
 }
-
 // ─────────────────────────────────────────────
 // Voice definitions
 // Friendly names → must match voiceMap keys
@@ -832,11 +834,8 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
     console.warn(`⚠️ Could not HEAD video URL: ${headErr.message}`);
   }
 
-  // Updated limits — local Bot API supports up to 2GB
-  const SEND_AS_VIDEO_LIMIT  = 2000 * 1024 * 1024;  // 2GB
-  const DOWNLOAD_SIZE_LIMIT  = 2000 * 1024 * 1024;  // 2GB
+  const DOWNLOAD_SIZE_LIMIT = 2000 * 1024 * 1024; // 2GB
 
-  // If somehow larger than 2GB, just send link
   if (fileSizeBytes > DOWNLOAD_SIZE_LIMIT) {
     await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
     return;
@@ -847,9 +846,9 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
   try {
     const response = await axios.get(result_video, {
       responseType: 'arraybuffer',
-      timeout:           300000,              // 5 minutes for large files
-      maxContentLength:  DOWNLOAD_SIZE_LIMIT,
-      maxBodyLength:     DOWNLOAD_SIZE_LIMIT
+      timeout: 300000,
+      maxContentLength: DOWNLOAD_SIZE_LIMIT,
+      maxBodyLength: DOWNLOAD_SIZE_LIMIT
     });
     videoBuffer = Buffer.from(response.data);
   } catch (downloadErr) {
@@ -861,14 +860,23 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
   const actualSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
   console.log(`✅ Downloaded: ${actualSizeMB} MB`);
 
+  // Use local sender for large files, official API for small ones
+  const isLargeFile = videoBuffer.length > 45 * 1024 * 1024;
+  const sender = (isLargeFile && localTelegram) ? localTelegram : bot.telegram;
+
+  console.log(
+    `📤 Sending via: ${isLargeFile && localTelegram ? 'local API' : 'official API'} ` +
+    `(${actualSizeMB}MB)`
+  );
+
   // Try sendVideo
   try {
-    await bot.telegram.sendVideo(
+    await sender.sendVideo(
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption:            `🎬 *Your video is ready!* 🎉`,
-        parse_mode:         'Markdown',
+        caption: `🎬 *Your video is ready!* 🎉`,
+        parse_mode: 'Markdown',
         supports_streaming: true
       }
     );
@@ -880,11 +888,11 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
 
   // Try sendDocument
   try {
-    await bot.telegram.sendDocument(
+    await sender.sendDocument(
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption:    `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document.`,
+        caption: `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document.`,
         parse_mode: 'Markdown'
       }
     );
@@ -895,7 +903,6 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
     await sendVideoAsLink(user_id, result_video, id, videoBuffer.length);
   }
 }
-
 // ─── Helper: Send video as plain text link (no Markdown on the URL) ──────────
 async function sendVideoAsLink(user_id, result_video, id, fileSizeBytes) {
   const sizeMB = fileSizeBytes ? ` (${(fileSizeBytes / 1024 / 1024).toFixed(0)}MB)` : '';
