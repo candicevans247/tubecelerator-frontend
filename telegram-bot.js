@@ -802,50 +802,118 @@ async function notifyAudioForReview({ id, user_id, result_audio }) {
 }
 
 async function notifyVideoComplete({ id, user_id, result_video }) {
+  
+  // ── Step 1: Get file size WITHOUT downloading the whole file ──────
+  let fileSizeBytes = 0;
+  
+  try {
+    const headResponse = await axios.head(result_video, { timeout: 15000 });
+    fileSizeBytes = parseInt(headResponse.headers['content-length'] || '0', 10);
+    console.log(`📦 Video size: ${(fileSizeBytes / 1024 / 1024).toFixed(2)} MB`);
+  } catch (headErr) {
+    console.warn(`⚠️ Could not HEAD video URL: ${headErr.message} — will try download`);
+  }
+
+  const TELEGRAM_VIDEO_LIMIT   = 50  * 1024 * 1024;  // 50MB  — sendVideo cap
+  const TELEGRAM_DOC_LIMIT     = 50  * 1024 * 1024;  // 50MB  — sendDocument cap
+  // Note: Telegram Bot API hard limit is 50MB for bots sending files.
+  // Anything above must be sent as a link.
+  const DOWNLOAD_SIZE_LIMIT    = 50  * 1024 * 1024;
+
+  // ── Step 2: If file is too large to send, skip download entirely ──
+  if (fileSizeBytes > DOWNLOAD_SIZE_LIMIT) {
+    console.log(`📨 File too large (${(fileSizeBytes / 1024 / 1024).toFixed(2)}MB) — sending link`);
+    await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
+    return;
+  }
+
+  // ── Step 3: Download (only if within size limit) ──────────────────
+  let videoBuffer;
+  
   try {
     const response = await axios.get(result_video, {
       responseType: 'arraybuffer',
-      timeout: 60000,
-      maxContentLength: 100 * 1024 * 1024
+      timeout: 120000,
+      maxContentLength: DOWNLOAD_SIZE_LIMIT,
+      maxBodyLength:    DOWNLOAD_SIZE_LIMIT
     });
+    videoBuffer = Buffer.from(response.data);
+  } catch (downloadErr) {
+    console.error(`❌ Download failed: ${downloadErr.message} — sending link`);
+    await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
+    return;
+  }
 
-    const videoBuffer = Buffer.from(response.data);
-    const fileSizeMB  = (videoBuffer.length / (1024 * 1024)).toFixed(2);
+  const actualSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
+  console.log(`✅ Downloaded: ${actualSizeMB} MB`);
 
-    if (videoBuffer.length > 50 * 1024 * 1024) {
-      await bot.telegram.sendDocument(
-        user_id,
-        { source: videoBuffer, filename: `video_${id}.mp4` },
-        {
-          caption:
-            `🎬 *Your video is ready!*\n\n` +
-            `⚠️ File too large for video player (${fileSizeMB}MB), sent as document.\n\n` +
-            `Download: ${result_video}`,
-          parse_mode: 'Markdown'
-        }
-      );
-      return;
-    }
-
+  // ── Step 4: Try sendVideo first, fall back to sendDocument ────────
+  try {
     await bot.telegram.sendVideo(
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption: `🎬 *Your video is ready!* 🎉`,
-        parse_mode: 'Markdown',
+        caption:           `🎬 *Your video is ready!* 🎉`,
+        parse_mode:        'Markdown',
         supports_streaming: true
       }
     );
-  } catch (error) {
-    console.error(`❌ Failed to send video:`, error.message);
+    console.log(`✅ Video sent to user ${user_id}`);
+    return;
+
+  } catch (videoErr) {
+    console.warn(`⚠️ sendVideo failed: ${videoErr.message} — trying sendDocument`);
+  }
+
+  try {
+    await bot.telegram.sendDocument(
+      user_id,
+      { source: videoBuffer, filename: `video_${id}.mp4` },
+      {
+        caption:    `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document — download and play locally.`,
+        parse_mode: 'Markdown'
+      }
+    );
+    console.log(`✅ Video sent as document to user ${user_id}`);
+    return;
+
+  } catch (docErr) {
+    console.warn(`⚠️ sendDocument also failed: ${docErr.message} — sending link`);
+    await sendVideoAsLink(user_id, result_video, id, videoBuffer.length);
+  }
+}
+
+// ─── Helper: Send video as plain text link (no Markdown on the URL) ──────────
+async function sendVideoAsLink(user_id, result_video, id, fileSizeBytes) {
+  const sizeMB = fileSizeBytes ? ` (${(fileSizeBytes / 1024 / 1024).toFixed(0)}MB)` : '';
+  
+  try {
+    // ⚠️  Use HTML parse_mode so the URL stays untouched
+    // Markdown chokes on underscores and dots in R2/S3 URLs
+    await bot.telegram.sendMessage(
+      user_id,
+      `🎬 <b>Your video is ready!</b> 🎉\n\n` +
+      `⚠️ File${sizeMB} is too large to send directly.\n\n` +
+      `📥 <b>Download your video:</b>\n` +
+      `${result_video}\n\n` +
+      `<i>Link valid for 7 days</i>`,
+      { 
+        parse_mode: 'HTML',   // ← HTML, not Markdown — URLs are safe
+        disable_web_page_preview: true
+      }
+    );
+    console.log(`✅ Download link sent to user ${user_id}`);
+  } catch (linkErr) {
+    // Last resort — no parse_mode at all, plain text
+    console.error(`❌ Even link message failed: ${linkErr.message}`);
     try {
       await bot.telegram.sendMessage(
         user_id,
-        `🎬 *Your video is ready!*\n\n⚠️ Could not send directly.\n\nDownload:\n${result_video}\n\n_Link valid for 7 days_`,
-        { parse_mode: 'Markdown' }
+        `Your video is ready! Download here:\n${result_video}`,
+        { disable_web_page_preview: true }
       );
-    } catch (fallbackError) {
-      console.error(`❌ Fallback also failed:`, fallbackError.message);
+    } catch (finalErr) {
+      console.error(`❌ All delivery attempts failed for user ${user_id}:`, finalErr.message);
     }
   }
 }
