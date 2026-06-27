@@ -7,7 +7,11 @@ const fs = require('fs');
 const path = require('path');
 const { uploadFile, deleteFile, getFileUrl } = require('./storage');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+  telegram: {
+    apiRoot: process.env.LOCAL_BOT_API_URL || 'https://api.telegram.org'
+  }
+});
 const { getUserSession, setUserSession, createSessionIfNotExists } = require('./sessions');
 const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits');
 
@@ -802,44 +806,39 @@ async function notifyAudioForReview({ id, user_id, result_audio }) {
 }
 
 async function notifyVideoComplete({ id, user_id, result_video }) {
-  
-  // ── Step 1: Get file size WITHOUT downloading the whole file ──────
+
+  // Check size first without downloading
   let fileSizeBytes = 0;
-  
   try {
     const headResponse = await axios.head(result_video, { timeout: 15000 });
     fileSizeBytes = parseInt(headResponse.headers['content-length'] || '0', 10);
     console.log(`📦 Video size: ${(fileSizeBytes / 1024 / 1024).toFixed(2)} MB`);
   } catch (headErr) {
-    console.warn(`⚠️ Could not HEAD video URL: ${headErr.message} — will try download`);
+    console.warn(`⚠️ Could not HEAD video URL: ${headErr.message}`);
   }
 
-  const TELEGRAM_VIDEO_LIMIT   = 50  * 1024 * 1024;  // 50MB  — sendVideo cap
-  const TELEGRAM_DOC_LIMIT     = 50  * 1024 * 1024;  // 50MB  — sendDocument cap
-  // Note: Telegram Bot API hard limit is 50MB for bots sending files.
-  // Anything above must be sent as a link.
-  const DOWNLOAD_SIZE_LIMIT    = 50  * 1024 * 1024;
+  // Updated limits — local Bot API supports up to 2GB
+  const SEND_AS_VIDEO_LIMIT  = 2000 * 1024 * 1024;  // 2GB
+  const DOWNLOAD_SIZE_LIMIT  = 2000 * 1024 * 1024;  // 2GB
 
-  // ── Step 2: If file is too large to send, skip download entirely ──
+  // If somehow larger than 2GB, just send link
   if (fileSizeBytes > DOWNLOAD_SIZE_LIMIT) {
-    console.log(`📨 File too large (${(fileSizeBytes / 1024 / 1024).toFixed(2)}MB) — sending link`);
     await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
     return;
   }
 
-  // ── Step 3: Download (only if within size limit) ──────────────────
+  // Download the file
   let videoBuffer;
-  
   try {
     const response = await axios.get(result_video, {
       responseType: 'arraybuffer',
-      timeout: 120000,
-      maxContentLength: DOWNLOAD_SIZE_LIMIT,
-      maxBodyLength:    DOWNLOAD_SIZE_LIMIT
+      timeout:           300000,              // 5 minutes for large files
+      maxContentLength:  DOWNLOAD_SIZE_LIMIT,
+      maxBodyLength:     DOWNLOAD_SIZE_LIMIT
     });
     videoBuffer = Buffer.from(response.data);
   } catch (downloadErr) {
-    console.error(`❌ Download failed: ${downloadErr.message} — sending link`);
+    console.error(`❌ Download failed: ${downloadErr.message}`);
     await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
     return;
   }
@@ -847,38 +846,37 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
   const actualSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
   console.log(`✅ Downloaded: ${actualSizeMB} MB`);
 
-  // ── Step 4: Try sendVideo first, fall back to sendDocument ────────
+  // Try sendVideo
   try {
     await bot.telegram.sendVideo(
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption:           `🎬 *Your video is ready!* 🎉`,
-        parse_mode:        'Markdown',
+        caption:            `🎬 *Your video is ready!* 🎉`,
+        parse_mode:         'Markdown',
         supports_streaming: true
       }
     );
     console.log(`✅ Video sent to user ${user_id}`);
     return;
-
   } catch (videoErr) {
-    console.warn(`⚠️ sendVideo failed: ${videoErr.message} — trying sendDocument`);
+    console.warn(`⚠️ sendVideo failed: ${videoErr.message} — trying document`);
   }
 
+  // Try sendDocument
   try {
     await bot.telegram.sendDocument(
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption:    `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document — download and play locally.`,
+        caption:    `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document.`,
         parse_mode: 'Markdown'
       }
     );
     console.log(`✅ Video sent as document to user ${user_id}`);
     return;
-
   } catch (docErr) {
-    console.warn(`⚠️ sendDocument also failed: ${docErr.message} — sending link`);
+    console.warn(`⚠️ sendDocument failed: ${docErr.message} — sending link`);
     await sendVideoAsLink(user_id, result_video, id, videoBuffer.length);
   }
 }
