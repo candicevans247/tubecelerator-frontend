@@ -704,9 +704,9 @@ async function notifyAllImagesComplete({ id, user_id }) {
   }
 }
 
-async function notifySegmentVideoForReview({ 
-  id, user_id, segmentIndex, totalSegments, 
-  segmentText, videoUrl, query 
+async function notifySegmentVideoForReview({
+  id, user_id, segmentIndex, totalSegments,
+  segmentText, videoUrl, query, isPlaceholder
 }) {
   try {
     const response = await axios.get(videoUrl, {
@@ -717,6 +717,30 @@ async function notifySegmentVideoForReview({
 
     const videoBuffer = Buffer.from(response.data);
 
+    // ── Keyboard — Approve / Trim / Refetch / Upload ──────────────────
+    const keyboard = isPlaceholder
+      ? // Placeholder: no approve or trim — only refetch or upload
+        [
+          [
+            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
+            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+          ]
+        ]
+      : [
+          [
+            { text: '✅ Approve',  callback_data: `approve_video_${id}_${segmentIndex}` },
+            { text: '✂️ Trim',    callback_data: `trim_video_${id}_${segmentIndex}`    }
+          ],
+          [
+            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
+            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+          ]
+        ];
+
+    const placeholderNote = isPlaceholder
+      ? `\n\n⚠️ *No footage found.* Refetch or upload your own.`
+      : '';
+
     await bot.telegram.sendVideo(
       user_id,
       { source: videoBuffer, filename: `stock_segment_${segmentIndex + 1}.mp4` },
@@ -724,63 +748,44 @@ async function notifySegmentVideoForReview({
         caption:
           `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
           `📝 *Text:* ${segmentText.substring(0, 150)}` +
-          `${segmentText.length > 150 ? '...' : ''}\n\n` +
-          `❓ Is this video suitable?`,
-        parse_mode: 'Markdown',
+          `${segmentText.length > 150 ? '...' : ''}` +
+          placeholderNote +
+          `\n\n❓ Is this video suitable?`,
+        parse_mode:         'Markdown',
         supports_streaming: true,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { 
-                text: '✅ Approve', 
-                callback_data: `approve_video_${id}_${segmentIndex}` 
-              },
-              { 
-                text: '🔄 Refetch', 
-                callback_data: `refetch_video_${id}_${segmentIndex}` 
-              }
-            ],
-            // ✅ NEW: Upload My Own button - mirrors image flow
-            [
-              { 
-                text: '📤 Upload My Own', 
-                callback_data: `upload_video_${id}_${segmentIndex}` 
-              }
-            ]
-          ]
-        }
+        reply_markup: { inline_keyboard: keyboard }
       }
     );
   } catch (error) {
     console.error(`❌ Failed to send stock video:`, error.message);
+
+    // Fallback: send as link
+    const keyboard = isPlaceholder
+      ? [
+          [
+            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
+            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+          ]
+        ]
+      : [
+          [
+            { text: '✅ Approve', callback_data: `approve_video_${id}_${segmentIndex}` },
+            { text: '✂️ Trim',   callback_data: `trim_video_${id}_${segmentIndex}`    }
+          ],
+          [
+            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
+            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+          ]
+        ];
+
     try {
-      // Fallback: send as link with upload option
       await bot.telegram.sendMessage(
         user_id,
         `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
         `⚠️ Could not preview video. Download:\n${videoUrl}`,
         {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { 
-                  text: '✅ Approve', 
-                  callback_data: `approve_video_${id}_${segmentIndex}` 
-                },
-                { 
-                  text: '🔄 Refetch', 
-                  callback_data: `refetch_video_${id}_${segmentIndex}` 
-                }
-              ],
-              [
-                { 
-                  text: '📤 Upload My Own', 
-                  callback_data: `upload_video_${id}_${segmentIndex}` 
-                }
-              ]
-            ]
-          }
+          parse_mode:  'Markdown',
+          reply_markup: { inline_keyboard: keyboard }
         }
       );
     } catch (fallbackError) {
@@ -1763,6 +1768,48 @@ if (callbackData.startsWith('upload_video_')) {
   await ctx.answerCbQuery('Send your video clip now 📤');
   return;
 }
+        // ── Video segment trim ────────────────────────────────────────────
+    if (callbackData.startsWith('trim_video_')) {
+      const parts        = callbackData.split('_');
+      const jobId        = parts[2];
+      const segmentIndex = parseInt(parts[3]);
+
+      // Store trim intent in userStates
+      const userData = userStates.get(ctx.chat.id) || {};
+      userData.awaitingTrimInput = { jobId, segmentIndex };
+      userStates.set(ctx.chat.id, userData);
+
+      try {
+        await ctx.editMessageCaption(
+          `✂️ *Trim Video — Segment ${segmentIndex + 1}*\n\n` +
+          `Type the time range you want to use:\n\n` +
+          `*Format:* \`0:20 - 0:45\`\n\n` +
+          `*Examples:*\n` +
+          `• \`0:00 - 0:30\` — first 30 seconds\n` +
+          `• \`0:15 - 0:45\` — 15s to 45s\n` +
+          `• \`1:00 - 1:30\` — 1min to 1min30s\n\n` +
+          `⏱ The selected clip will loop to fill the segment duration if needed.`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (editErr) {
+        // If message has no caption (text message fallback)
+        await ctx.reply(
+          `✂️ *Trim Video — Segment ${segmentIndex + 1}*\n\n` +
+          `Type the time range you want to use:\n\n` +
+          `*Format:* \`0:20 - 0:45\`\n\n` +
+          `*Examples:*\n` +
+          `• \`0:00 - 0:30\` — first 30 seconds\n` +
+          `• \`0:15 - 0:45\` — 15s to 45s\n` +
+          `• \`1:00 - 1:30\` — 1min to 1min30s\n\n` +
+          `⏱ The selected clip will loop to fill the segment duration if needed.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+
+      await ctx.answerCbQuery('Type your time range ✂️');
+      return;
+    }
+    
     
     // ── Video segment approval ────────────────────────────────────────
     if (callbackData.startsWith('approve_video_')) {
@@ -2312,6 +2359,104 @@ bot.on('text', async (ctx) => {
     }
   }
 
+    // ── Trim input ────────────────────────────────────────────────────
+  if (userData.awaitingTrimInput) {
+    const { jobId, segmentIndex } = userData.awaitingTrimInput;
+
+    // Parse "M:SS - M:SS" or "MM:SS - MM:SS"
+    const trimMatch = message.match(
+      /^(\d+):(\d{2})\s*[-–]\s*(\d+):(\d{2})$/
+    );
+
+    if (!trimMatch) {
+      return ctx.reply(
+        `⚠️ Invalid format. Please use \`M:SS - M:SS\`\n\n` +
+        `*Examples:*\n` +
+        `• \`0:20 - 0:45\`\n` +
+        `• \`1:00 - 1:30\``,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    // Convert to seconds
+    const startMin = parseInt(trimMatch[1]);
+    const startSec = parseInt(trimMatch[2]);
+    const endMin   = parseInt(trimMatch[3]);
+    const endSec   = parseInt(trimMatch[4]);
+
+    const trimStart = startMin * 60 + startSec;
+    const trimEnd   = endMin   * 60 + endSec;
+
+    // Basic validation
+    if (trimStart < 0) {
+      return ctx.reply(
+        `⚠️ Start time cannot be negative. Try again:`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    if (trimEnd <= trimStart) {
+      return ctx.reply(
+        `⚠️ End time must be *after* start time.\n\n` +
+        `You entered: \`${message}\`\n` +
+        `Please try again:`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    const clipDuration = trimEnd - trimStart;
+    if (clipDuration < 1) {
+      return ctx.reply(
+        `⚠️ Clip must be at least 1 second long. Please try again:`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    try {
+      await ctx.reply(
+        `✂️ Applying trim: \`${message}\` ` +
+        `(${clipDuration}s clip)...`,
+        { parse_mode: 'Markdown' }
+      );
+
+      // Send trim to worker
+      const response = await axios.post(
+        `${WORKER_BASE_URL}/trim-video-segment`,
+        {
+          jobId:      parseInt(jobId),
+          segmentIndex,
+          trimStart,
+          trimEnd
+        }
+      );
+
+      if (response.data.success) {
+        // Wake worker to advance pipeline
+        await wakeWorker(jobId, 'video_segment_approved');
+
+        // Clear trim state
+        delete userData.awaitingTrimInput;
+        userStates.set(ctx.chat.id, userData);
+
+        await ctx.reply(
+          `✅ *Trim applied for Segment ${segmentIndex + 1}!*\n\n` +
+          `⏱ Using \`${message}\` (${clipDuration}s)\n` +
+          `🔄 Moving to next segment...`,
+          { parse_mode: 'Markdown' }
+        );
+      } else {
+        throw new Error(response.data.error || 'Failed to apply trim');
+      }
+
+    } catch (error) {
+      console.error('Error applying trim:', error.message);
+      await ctx.reply(
+        `❌ Failed to apply trim. Please try again or use the buttons to Approve/Refetch.`
+      );
+    }
+    return;
+  }
+  
   // ── Support mode ──────────────────────────────────────────────────
   const session         = await getUserSession(ctx.chat.id);
   const isInSupportMode = userData?.supportMode === true || session?.supportMode === true;
