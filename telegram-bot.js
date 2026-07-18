@@ -708,90 +708,163 @@ async function notifySegmentVideoForReview({
   id, user_id, segmentIndex, totalSegments,
   segmentText, videoUrl, query, isPlaceholder
 }) {
+  // ── Keyboard ──────────────────────────────────────────────────────
+  const keyboard = isPlaceholder
+    ? [
+        [
+          { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
+          { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+        ]
+      ]
+    : [
+        [
+          { text: '✅ Approve', callback_data: `approve_video_${id}_${segmentIndex}` },
+          { text: '✂️ Trim',   callback_data: `trim_video_${id}_${segmentIndex}`    }
+        ],
+        [
+          { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
+          { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+        ]
+      ];
+
+  const placeholderNote = isPlaceholder
+    ? `\n\n⚠️ *No footage found.* Refetch or upload your own.`
+    : '';
+
+  const caption =
+    `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
+    `📝 *Text:* ${segmentText.substring(0, 150)}` +
+    `${segmentText.length > 150 ? '...' : ''}` +
+    placeholderNote +
+    `\n\n❓ Is this video suitable?`;
+
+  // ── Step 1: Check file size before downloading ────────────────────
+  let fileSizeBytes = 0;
+  try {
+    const headRes = await axios.head(videoUrl, { timeout: 15000 });
+    fileSizeBytes = parseInt(headRes.headers['content-length'] || '0', 10);
+    console.log(
+      `📦 Segment video size: ${(fileSizeBytes / 1024 / 1024).toFixed(2)}MB`
+    );
+  } catch (headErr) {
+    console.warn(`⚠️ Could not HEAD segment video URL: ${headErr.message}`);
+  }
+
+  const DOWNLOAD_LIMIT = 2000 * 1024 * 1024; // 2GB — telegram-bot-api limit
+
+  // ── Step 2: If over 2GB send as link (extreme edge case) ─────────
+  if (fileSizeBytes > DOWNLOAD_LIMIT) {
+    console.warn(`⚠️ Segment video too large even for local API — sending as link`);
+    await sendSegmentVideoAsLink(
+      user_id, videoUrl, id, segmentIndex, totalSegments,
+      segmentText, fileSizeBytes, keyboard, isPlaceholder
+    );
+    return;
+  }
+
+  // ── Step 3: Download the video ────────────────────────────────────
+  let videoBuffer;
   try {
     const response = await axios.get(videoUrl, {
-      responseType: 'arraybuffer',
-      timeout: 60000,
-      maxContentLength: 50 * 1024 * 1024
+      responseType:       'arraybuffer',
+      timeout:            300000,           // 5 min for large files
+      maxContentLength:   DOWNLOAD_LIMIT,
+      maxBodyLength:      DOWNLOAD_LIMIT
     });
+    videoBuffer = Buffer.from(response.data);
+  } catch (downloadErr) {
+    console.error(`❌ Failed to download segment video: ${downloadErr.message}`);
+    await sendSegmentVideoAsLink(
+      user_id, videoUrl, id, segmentIndex, totalSegments,
+      segmentText, fileSizeBytes, keyboard, isPlaceholder
+    );
+    return;
+  }
 
-    const videoBuffer = Buffer.from(response.data);
+  const actualSizeMB = (videoBuffer.length / 1024 / 1024).toFixed(2);
+  console.log(`✅ Downloaded segment video: ${actualSizeMB}MB`);
 
-    // ── Keyboard — Approve / Trim / Refetch / Upload ──────────────────
-    const keyboard = isPlaceholder
-      ? // Placeholder: no approve or trim — only refetch or upload
-        [
-          [
-            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
-            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
-          ]
-        ]
-      : [
-          [
-            { text: '✅ Approve',  callback_data: `approve_video_${id}_${segmentIndex}` },
-            { text: '✂️ Trim',    callback_data: `trim_video_${id}_${segmentIndex}`    }
-          ],
-          [
-            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
-            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
-          ]
-        ];
+  // ── Step 4: Choose sender based on size ───────────────────────────
+  // Official API limit: ~50MB
+  // Local Telegram Bot API: up to 2GB
+  const isLargeFile = videoBuffer.length > 45 * 1024 * 1024;
+  const sender      = (isLargeFile && localTelegram) ? localTelegram : bot.telegram;
 
-    const placeholderNote = isPlaceholder
-      ? `\n\n⚠️ *No footage found.* Refetch or upload your own.`
-      : '';
+  console.log(
+    `📤 Sending segment video via: ` +
+    `${isLargeFile && localTelegram ? 'local API' : 'official API'} ` +
+    `(${actualSizeMB}MB)`
+  );
 
-    await bot.telegram.sendVideo(
+  // ── Step 5: Try sendVideo ─────────────────────────────────────────
+  try {
+    await sender.sendVideo(
       user_id,
       { source: videoBuffer, filename: `stock_segment_${segmentIndex + 1}.mp4` },
       {
-        caption:
-          `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
-          `📝 *Text:* ${segmentText.substring(0, 150)}` +
-          `${segmentText.length > 150 ? '...' : ''}` +
-          placeholderNote +
-          `\n\n❓ Is this video suitable?`,
+        caption,
         parse_mode:         'Markdown',
         supports_streaming: true,
+        reply_markup:       { inline_keyboard: keyboard }
+      }
+    );
+    console.log(`✅ Segment video sent to user ${user_id}`);
+    return;
+  } catch (videoErr) {
+    console.warn(`⚠️ sendVideo failed: ${videoErr.message} — trying sendDocument`);
+  }
+
+  // ── Step 6: Try sendDocument ──────────────────────────────────────
+  try {
+    await sender.sendDocument(
+      user_id,
+      { source: videoBuffer, filename: `stock_segment_${segmentIndex + 1}.mp4` },
+      {
+        caption:      caption,
+        parse_mode:   'Markdown',
         reply_markup: { inline_keyboard: keyboard }
       }
     );
-  } catch (error) {
-    console.error(`❌ Failed to send stock video:`, error.message);
+    console.log(`✅ Segment video sent as document to user ${user_id}`);
+    return;
+  } catch (docErr) {
+    console.warn(`⚠️ sendDocument failed: ${docErr.message} — sending as link`);
+    await sendSegmentVideoAsLink(
+      user_id, videoUrl, id, segmentIndex, totalSegments,
+      segmentText, videoBuffer.length, keyboard, isPlaceholder
+    );
+  }
+}
 
-    // Fallback: send as link
-    const keyboard = isPlaceholder
-      ? [
-          [
-            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
-            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
-          ]
-        ]
-      : [
-          [
-            { text: '✅ Approve', callback_data: `approve_video_${id}_${segmentIndex}` },
-            { text: '✂️ Trim',   callback_data: `trim_video_${id}_${segmentIndex}`    }
-          ],
-          [
-            { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
-            { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
-          ]
-        ];
+// ── Helper: send segment video as plain link ──────────────────────────────
+async function sendSegmentVideoAsLink(
+  user_id, videoUrl, id, segmentIndex, totalSegments,
+  segmentText, fileSizeBytes, keyboard, isPlaceholder
+) {
+  const sizeMB         = fileSizeBytes ? ` (${(fileSizeBytes / 1024 / 1024).toFixed(0)}MB)` : '';
+  const placeholderNote = isPlaceholder
+    ? `\n\n⚠️ <b>No footage found.</b> Refetch or upload your own.`
+    : '';
 
-    try {
-      await bot.telegram.sendMessage(
-        user_id,
-        `🎬 *Video clip for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
-        `⚠️ Could not preview video. Download:\n${videoUrl}`,
-        {
-          parse_mode:  'Markdown',
-          reply_markup: { inline_keyboard: keyboard }
-        }
-      );
-    } catch (fallbackError) {
-      console.error(`❌ Fallback also failed:`, fallbackError.message);
-      throw error;
-    }
+  try {
+    await bot.telegram.sendMessage(
+      user_id,
+      `🎬 <b>Video clip for Segment ${segmentIndex + 1}/${totalSegments}</b>\n\n` +
+      `📝 <b>Text:</b> ${segmentText.substring(0, 150)}` +
+      `${segmentText.length > 150 ? '...' : ''}` +
+      placeholderNote +
+      `\n\n⚠️ File${sizeMB} too large to preview. Download:\n` +
+      `${videoUrl}\n\n` +
+      `❓ Is this video suitable?`,
+      {
+        parse_mode:              'HTML',
+        disable_web_page_preview: true,
+        reply_markup:            { inline_keyboard: keyboard }
+      }
+    );
+    console.log(`✅ Segment video link sent to user ${user_id}`);
+  } catch (linkErr) {
+    console.error(`❌ Even link message failed for segment video: ${linkErr.message}`);
   }
 }
 
