@@ -1169,7 +1169,8 @@ bot.hears('🎬 Create Video', async (ctx) => {
 
 bot.hears('🎙️ Generate Audio Only', async (ctx) => {
   const userData = userStates.get(ctx.chat.id) || {};
-  userData.topLevelFlow = 'audio';
+  userData.topLevelFlow    = 'audio';
+  userData.awaitingAudioText = true;   // ← THIS IS THE MISSING FLAG
   userStates.set(ctx.chat.id, userData);
 
   return ctx.reply(
@@ -2641,33 +2642,71 @@ if (message === '❌ Cancel') {
 }
 
 // ── Audio-only flow: awaiting text input ─────────────────────────
-if (userData.topLevelFlow === 'audio' && !userData.voice && !userData.awaitingAudioText) {
-  // They typed something but haven't picked a voice yet
-  // This path handles if someone types before choosing voice
-  // Redirect them to pick a voice first
+// ══════════════════════════════════════════════════════════════════
+// 🎙️ AUDIO-ONLY FLOW — all steps handled here in correct order
+// ══════════════════════════════════════════════════════════════════
+
+// ── Step 1: Collect text ──────────────────────────────────────────
+// awaitingAudioText is set by the 'Generate Audio Only' hears handler
+if (userData.topLevelFlow === 'audio' && userData.awaitingAudioText) {
+  if (message.startsWith('/')) return;
+
+  const inputText = message.trim();
+
+  if (inputText.length < 10) {
+    return ctx.reply(
+      '⚠️ Text is too short. Please send at least a few sentences.',
+      Markup.keyboard([['❌ Cancel']]).oneTime().resize()
+    );
+  }
+
+  if (inputText.length > 50000) {
+    return ctx.reply(
+      '⚠️ Text is too long (max 50,000 characters). Please shorten it.',
+      Markup.keyboard([['❌ Cancel']]).oneTime().resize()
+    );
+  }
+
+  // Store text, clear awaitingAudioText, now ask for voice
+  userData.pendingAudioText      = inputText;
+  userData.pendingAudioWordCount = inputText.split(/\s+/).length;
+  delete userData.awaitingAudioText;
+  userStates.set(ctx.chat.id, userData);
+
+  await ctx.reply(
+    `✅ *Text received!*\n\n` +
+    `📝 Words: *${userData.pendingAudioWordCount}*\n\n` +
+    `Now choose a voice for your audio:`,
+    { parse_mode: 'Markdown' }
+  );
+
   await showVoicePage(ctx, 0);
   return ctx.reply(
-    '👆 First choose a voice:',
+    '👆 Browse samples above, then choose your voice:',
     Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
   );
 }
 
-// ── Audio-only flow: text received, now confirm & charge ─────────
-if (userData.topLevelFlow === 'audio' && userData.awaitingAudioText) {
+// ── Step 2: Voice picked → show confirmation ──────────────────────
+if (
+  userData.topLevelFlow === 'audio' &&
+  userData.pendingAudioText        &&
+  !userData.voice                  &&
+  ALL_VOICES.includes(message)
+) {
+  userData.voice = message;
+  userStates.set(ctx.chat.id, userData);
 
-  if (message.startsWith('/')) return; // ignore commands
-
-  const inputText  = message.trim();
-  const wordCount  = inputText.split(/\s+/).length;
+  const wordCount  = userData.pendingAudioWordCount ||
+                     userData.pendingAudioText.split(/\s+/).length;
   const estMinutes = Math.max(1, Math.ceil(wordCount / 150));
   const creditCost = calculateAudioCreditCost(wordCount);
 
-  // Preview before charging
-  await ctx.reply(
+  return ctx.reply(
     `📊 *Audio Summary*\n\n` +
     `📝 Words: *${wordCount}*\n` +
     `⏱ Estimated duration: *~${estMinutes} minute(s)*\n` +
-    `🎤 Voice: *${userData.voice}*\n` +
+    `🎤 Voice: *${message}*\n` +
     `💰 Cost: *${creditCost} credit(s)*\n\n` +
     `Confirm to generate your audio:`,
     {
@@ -2680,24 +2719,17 @@ if (userData.topLevelFlow === 'audio' && userData.awaitingAudioText) {
       }
     }
   );
-
-  // Store text for when they confirm
-  userData.pendingAudioText = inputText;
-  userData.pendingAudioWordCount = wordCount;
-  delete userData.awaitingAudioText;
-  userStates.set(ctx.chat.id, userData);
-  return;
 }
 
-// ── Audio-only flow: initial text before voice (start of flow) ────
-if (userData.topLevelFlow === 'audio' && !userData.voice && !userData.awaitingAudioText) {
-  // Store the text, then ask for voice
-  userData.pendingAudioText = message.trim();
-  userStates.set(ctx.chat.id, userData);
-
-  await showVoicePage(ctx, 0);
+// ── Audio flow: invalid voice typed → re-prompt ───────────────────
+if (
+  userData.topLevelFlow === 'audio' &&
+  userData.pendingAudioText         &&
+  !userData.voice                   &&
+  !message.startsWith('/')
+) {
   return ctx.reply(
-    '🎤 Choose a voice for your audio:',
+    '⚠️ Please choose a voice from the keyboard:',
     Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
   );
 }
@@ -2909,61 +2941,14 @@ if (userData.topLevelFlow === 'audio' && !userData.voice && !userData.awaitingAu
     );
   }
 
-  // ── Voice selection ───────────────────────────────────────────────
-  if (!userData.voice && ALL_VOICES.includes(message)) {
-    userData.voice = message;
-    userStates.set(ctx.chat.id, userData);
 
-    // ALL Gemini voices support style instructions — always ask
-    userData.awaitingStyleInstruction = true;
-    userStates.set(ctx.chat.id, userData);
-
-    return ctx.reply(
-      `🎤 *${message}* selected!\n\n` +
-      `✨ All voices support custom delivery styles.\n\n` +
-      `Describe how you'd like the voice delivered:\n\n` +
-      `*Examples:*\n` +
-      `• _"Speak slowly and with gravitas"_\n` +
-      `• _"Energetic and fast-paced"_\n` +
-      `• _"Calm and soothing, like a documentary"_\n` +
-      `• _"Excited and enthusiastic"_\n` +
-      `• _"Authoritative news anchor tone"_\n\n` +
-      `Or tap *Skip* to use the default narration style.`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.keyboard([['⏭️ Skip Style']]).oneTime().resize()
-      }
-    );
-
-  } else if (!userData.voice && userData.videotype) {
-    return ctx.reply(
-      '⚠️ Please choose a voice:',
-      Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
-    );
-  }
-
-  // ── Voice selection ───────────────────────────────────────────────
-if (!userData.voice && ALL_VOICES.includes(message)) {
+// ── Voice selection (VIDEO flow) ──────────────────────────────────
+// Audio flow voice picks are handled in the audio section above
+if (!userData.voice && ALL_VOICES.includes(message) && userData.topLevelFlow !== 'audio') {
   userData.voice = message;
   userStates.set(ctx.chat.id, userData);
 
-  // ── Audio-only flow: voice chosen → ask for text ───────────────
-  if (userData.topLevelFlow === 'audio') {
-    userData.awaitingAudioText = true;
-    userStates.set(ctx.chat.id, userData);
-
-    return ctx.reply(
-      `🎤 *${message}* selected!\n\n` +
-      `Now send me the text you want to convert to speech:`,
-      {
-        parse_mode: 'Markdown',
-        ...Markup.keyboard([['❌ Cancel']]).oneTime().resize()
-      }
-    );
-  }
-
-  // ── Video flow: voice chosen → go straight to media type ───────
-  // Fish Audio does not support style instructions
+  // Fish Audio — go straight to media type, no style instructions
   return ctx.reply(
     `🎤 *${message}* selected!\n\n` +
     `What type of media would you like to use?`,
@@ -2977,7 +2962,7 @@ if (!userData.voice && ALL_VOICES.includes(message)) {
     }
   );
 
-} else if (!userData.voice && userData.videotype) {
+} else if (!userData.voice && userData.videotype && userData.topLevelFlow !== 'audio') {
   return ctx.reply(
     '⚠️ Please choose a voice:',
     Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
