@@ -36,8 +36,8 @@ function getTelegramFileUrl(filePath) {
 // Voice definitions
 // Friendly names → must match voiceMap keys
 // in audio-robot.js exactly
-// All 16 voices support style instruction prompting
-// via Gemini TTS — no tiered separation needed
+// All voices use Fish Audio — no style instructions
+// voice selection goes straight to media type
 // ─────────────────────────────────────────────
 
 const FEMALE_VOICES = ['Luna', 'Aria', 'Zoe', 'Calla', 'Erin', 'Kore', 'Lucy', 'Leda', 'Sally', 'Violet'];
@@ -407,6 +407,41 @@ async function showCreditBreakdown(ctx, userData) {
   );
 
   return baseCost;
+}
+
+// ─────────────────────────────────────────────
+// Audio-only credit cost
+// Flat rate: 5 credits per minute of input text
+// Estimated at ~150 words per minute
+// ─────────────────────────────────────────────
+function calculateAudioCreditCost(wordCount) {
+  const estimatedMinutes = Math.max(1, Math.ceil(wordCount / 150));
+  return estimatedMinutes * 5; // 5 credits per minute
+}
+
+async function tryDeductAudioCredits(ctx, wordCount) {
+  const creditCost     = calculateAudioCreditCost(wordCount);
+  const creditInfo     = await getCredits(ctx.chat.id);
+  const currentCredits = typeof creditInfo === 'object' ? creditInfo.amount : creditInfo;
+
+  console.log(
+    `💰 Audio credit check | user ${ctx.chat.id} | ` +
+    `words: ${wordCount} | cost: ${creditCost} | has: ${currentCredits}`
+  );
+
+  if (currentCredits < creditCost) {
+    return {
+      success:        false,
+      reason:         'insufficient_credits',
+      creditCost,
+      currentCredits,
+    };
+  }
+
+  const result = await useCredits(ctx.chat.id, creditCost);
+  if (!result.success) return { success: false, reason: result.reason };
+
+  return { success: true, creditCost, remaining: result.remaining };
 }
 
 async function tryDeductCredits(ctx, userData) {
@@ -1107,8 +1142,45 @@ bot.start(async (ctx) => {
   });
 
   return ctx.reply(
+    '👋 Welcome! What would you like to create?',
+    Markup.keyboard([
+      ['🎬 Create Video'],
+      ['🎙️ Generate Audio Only'],
+    ]).oneTime().resize()
+  );
+});
+
+// ─────────────────────────────────────────────
+// Top-level routing — Video vs Audio Only
+// ─────────────────────────────────────────────
+bot.hears('🎬 Create Video', async (ctx) => {
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.topLevelFlow = 'video';
+  userStates.set(ctx.chat.id, userData);
+
+  return ctx.reply(
     '🎬 Choose your content flow.',
-    Markup.keyboard([['📰 Essay Styled Videos'], ['📋 Listicle Videos']]).oneTime().resize()
+    Markup.keyboard([
+      ['📰 Essay Styled Videos'],
+      ['📋 Listicle Videos'],
+    ]).oneTime().resize()
+  );
+});
+
+bot.hears('🎙️ Generate Audio Only', async (ctx) => {
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.topLevelFlow = 'audio';
+  userStates.set(ctx.chat.id, userData);
+
+  return ctx.reply(
+    '🎙️ *Audio Generator*\n\n' +
+    'Send me the text you want converted to speech.\n\n' +
+    '📋 *Pricing:* 5 credits per minute of audio\n' +
+    '_(~150 words = 1 minute)_',
+    {
+      parse_mode: 'Markdown',
+      ...Markup.keyboard([['❌ Cancel']]).oneTime().resize()
+    }
   );
 });
 
@@ -1703,6 +1775,148 @@ bot.on('callback_query', async (ctx) => {
   console.log('Callback:', callbackData, '| User:', ctx.from.id);
 
   try {
+    // ── Audio generation confirm ──────────────────────────────────────
+if (callbackData === 'confirm_audio_generate') {
+  await ctx.answerCbQuery('Generating your audio...');
+
+  const userData = userStates.get(ctx.chat.id) || {};
+
+  if (!userData.pendingAudioText || !userData.voice) {
+    await ctx.editMessageText('❌ Session expired. Please use /start to begin again.');
+    return;
+  }
+
+  const wordCount  = userData.pendingAudioWordCount ||
+                     userData.pendingAudioText.split(/\s+/).length;
+  const creditCost = calculateAudioCreditCost(wordCount);
+
+  // Deduct credits
+  const deduction = await tryDeductAudioCredits(ctx, wordCount);
+
+  if (!deduction.success) {
+    await ctx.editMessageText(
+      `❌ *Insufficient Credits*\n\n` +
+      `Required: *${deduction.creditCost}* credits\n` +
+      `You have: *${deduction.currentCredits}* credits\n\n` +
+      `Contact /support to top up.`,
+      { parse_mode: 'Markdown' }
+    );
+    userStates.delete(ctx.chat.id);
+    return;
+  }
+
+  await ctx.editMessageText(
+    `✅ *${deduction.creditCost} credit(s) deducted*\n` +
+    `💰 Remaining: *${deduction.remaining}*\n\n` +
+    `🎙️ Generating your audio with *${userData.voice}*...\n\n` +
+    `This may take a moment ⏳`,
+    { parse_mode: 'Markdown' }
+  );
+
+  // Create a job record so we can track it
+  let jobId;
+  try {
+    const jobResult = await pool.query(
+      `INSERT INTO jobs
+         (user_id, script, videotype, duration, voice, content_flow,
+          media_type, status, created_at, updated_at)
+       VALUES ($1, $2, 'longform', 1, $3, 'news', 'images', 'audio_only', NOW(), NOW())
+       RETURNING id`,
+      [ctx.chat.id, userData.pendingAudioText, userData.voice]
+    );
+    jobId = jobResult.rows[0].id;
+    console.log(`🎙️ Audio-only job created: ${jobId} for user ${ctx.chat.id}`);
+  } catch (dbErr) {
+    console.error('Failed to create audio job:', dbErr.message);
+    await ctx.reply('❌ Failed to start audio generation. Please try again.');
+    userStates.delete(ctx.chat.id);
+    return;
+  }
+
+  // Clear state before async work
+  const audioText = userData.pendingAudioText;
+  const voice     = userData.voice;
+  userStates.delete(ctx.chat.id);
+
+  // Generate audio async — don't block the callback response
+  setImmediate(async () => {
+    try {
+      const { generateAudioFromText } = require('./audio-robot');
+
+      const { mergedUrl, totalDuration } = await generateAudioFromText(
+        audioText,
+        voice,
+        jobId
+      );
+
+      // Mark job complete
+      await pool.query(
+        `UPDATE jobs SET status = 'completed', updated_at = NOW() WHERE id = $1`,
+        [jobId]
+      );
+
+      // Download and send the audio file
+      const response    = await axios.get(mergedUrl, { responseType: 'arraybuffer', timeout: 60000 });
+      const audioBuffer = Buffer.from(response.data);
+
+      await bot.telegram.sendAudio(
+        ctx.chat.id,
+        { source: audioBuffer, filename: `audio_${jobId}.mp3` },
+        {
+          caption:
+            `🎙️ *Your Audio is Ready!*\n\n` +
+            `🎤 Voice: *${voice}*\n` +
+            `⏱ Duration: *${totalDuration.toFixed(1)}s*\n` +
+            `🆔 Job ID: \`${jobId}\``,
+          parse_mode: 'Markdown',
+        }
+      );
+
+      console.log(`✅ Audio-only job ${jobId} delivered to user ${ctx.chat.id}`);
+
+    } catch (audioErr) {
+      console.error(`❌ Audio-only job ${jobId} failed:`, audioErr.message);
+
+      await pool.query(
+        `UPDATE jobs SET status = 'error', error_message = $1, updated_at = NOW() WHERE id = $2`,
+        [audioErr.message, jobId]
+      );
+
+      try {
+        await bot.telegram.sendMessage(
+          ctx.chat.id,
+          `❌ *Audio generation failed*\n\n` +
+          `Error: ${audioErr.message}\n\n` +
+          `Your credits have been refunded. Please try again or contact /support.`,
+          { parse_mode: 'Markdown' }
+        );
+
+        // Refund credits on failure
+        await setCredits(
+          ctx.chat.id,
+          deduction.creditCost,
+          `refund_audio_${jobId}`,
+          'audio_generation_failed'
+        );
+      } catch (notifyErr) {
+        console.error('Failed to notify user of audio error:', notifyErr.message);
+      }
+    }
+  });
+
+  return;
+}
+
+// ── Audio generation cancel ───────────────────────────────────────
+if (callbackData === 'cancel_audio_generate') {
+  await ctx.answerCbQuery('Cancelled');
+  userStates.delete(ctx.chat.id);
+  await ctx.editMessageText(
+    '❌ Audio generation cancelled.\n\nUse /start to begin again.'
+  );
+  return;
+}
+    
     // ── Job approval (admin) ──────────────────────────────────────────
     if (callbackData.startsWith('approve_job_')) {
       if (!isAdmin(ctx)) return ctx.answerCbQuery('❌ Admin only', true);
@@ -2416,6 +2630,78 @@ bot.on('text', async (ctx) => {
     }
   }
 
+  // ── Cancel button ─────────────────────────────────────────────────
+if (message === '❌ Cancel') {
+  clearScriptTimeout(ctx.chat.id);
+  userStates.set(ctx.chat.id, {});
+  return ctx.reply(
+    '❌ Cancelled. Use /start to begin again.',
+    { reply_markup: { remove_keyboard: true } }
+  );
+}
+
+// ── Audio-only flow: awaiting text input ─────────────────────────
+if (userData.topLevelFlow === 'audio' && !userData.voice && !userData.awaitingAudioText) {
+  // They typed something but haven't picked a voice yet
+  // This path handles if someone types before choosing voice
+  // Redirect them to pick a voice first
+  await showVoicePage(ctx, 0);
+  return ctx.reply(
+    '👆 First choose a voice:',
+    Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
+  );
+}
+
+// ── Audio-only flow: text received, now confirm & charge ─────────
+if (userData.topLevelFlow === 'audio' && userData.awaitingAudioText) {
+
+  if (message.startsWith('/')) return; // ignore commands
+
+  const inputText  = message.trim();
+  const wordCount  = inputText.split(/\s+/).length;
+  const estMinutes = Math.max(1, Math.ceil(wordCount / 150));
+  const creditCost = calculateAudioCreditCost(wordCount);
+
+  // Preview before charging
+  await ctx.reply(
+    `📊 *Audio Summary*\n\n` +
+    `📝 Words: *${wordCount}*\n` +
+    `⏱ Estimated duration: *~${estMinutes} minute(s)*\n` +
+    `🎤 Voice: *${userData.voice}*\n` +
+    `💰 Cost: *${creditCost} credit(s)*\n\n` +
+    `Confirm to generate your audio:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '✅ Generate Audio', callback_data: 'confirm_audio_generate' },
+          { text: '❌ Cancel',         callback_data: 'cancel_audio_generate'  },
+        ]]
+      }
+    }
+  );
+
+  // Store text for when they confirm
+  userData.pendingAudioText = inputText;
+  userData.pendingAudioWordCount = wordCount;
+  delete userData.awaitingAudioText;
+  userStates.set(ctx.chat.id, userData);
+  return;
+}
+
+// ── Audio-only flow: initial text before voice (start of flow) ────
+if (userData.topLevelFlow === 'audio' && !userData.voice && !userData.awaitingAudioText) {
+  // Store the text, then ask for voice
+  userData.pendingAudioText = message.trim();
+  userStates.set(ctx.chat.id, userData);
+
+  await showVoicePage(ctx, 0);
+  return ctx.reply(
+    '🎤 Choose a voice for your audio:',
+    Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
+  );
+}
+  
   // ── Admin replying to support message ─────────────────────────────
   if (isAdmin(ctx) && ctx.message.reply_to_message) {
     const repliedMessage = ctx.message.reply_to_message;
@@ -2656,35 +2942,47 @@ bot.on('text', async (ctx) => {
     );
   }
 
-  // ── Style instruction (all voices) ───────────────────────────────
-  if (userData.voice && userData.awaitingStyleInstruction) {
+  // ── Voice selection ───────────────────────────────────────────────
+if (!userData.voice && ALL_VOICES.includes(message)) {
+  userData.voice = message;
+  userStates.set(ctx.chat.id, userData);
 
-    if (message === '⏭️ Skip Style') {
-      userData.styleInstruction = null;
-    } else {
-      if (message.startsWith('/')) {
-        return ctx.reply(
-          '⚠️ Please enter a style description or tap Skip:',
-          Markup.keyboard([['⏭️ Skip Style']]).oneTime().resize()
-        );
-      }
-      if (message.length > 200) {
-        return ctx.reply(
-          '⚠️ Style instruction too long (max 200 characters). Please shorten it:',
-          Markup.keyboard([['⏭️ Skip Style']]).oneTime().resize()
-        );
-      }
-      userData.styleInstruction = message.trim();
-    }
-
-    delete userData.awaitingStyleInstruction;
+  // ── Audio-only flow: voice chosen → ask for text ───────────────
+  if (userData.topLevelFlow === 'audio') {
+    userData.awaitingAudioText = true;
     userStates.set(ctx.chat.id, userData);
 
     return ctx.reply(
-      'What type of media would you like to use?',
-      Markup.keyboard([['Images Only'], ['Videos Only'], ['Images + Videos']]).oneTime().resize()
+      `🎤 *${message}* selected!\n\n` +
+      `Now send me the text you want to convert to speech:`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.keyboard([['❌ Cancel']]).oneTime().resize()
+      }
     );
   }
+
+  // ── Video flow: voice chosen → go straight to media type ───────
+  // Fish Audio does not support style instructions
+  return ctx.reply(
+    `🎤 *${message}* selected!\n\n` +
+    `What type of media would you like to use?`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.keyboard([
+        ['Images Only'],
+        ['Videos Only'],
+        ['Images + Videos'],
+      ]).oneTime().resize()
+    }
+  );
+
+} else if (!userData.voice && userData.videotype) {
+  return ctx.reply(
+    '⚠️ Please choose a voice:',
+    Markup.keyboard(VOICE_KEYBOARD_ROWS).oneTime().resize()
+  );
+}
 
   // ── Media type ────────────────────────────────────────────────────
   if (userData.voice && !userData.mediaType && ['Images Only', 'Videos Only', 'Images + Videos'].includes(message)) {
@@ -2898,18 +3196,19 @@ async function handleQuickVideoJSON(ctx, userData, message) {
       }
     }
 
-    const jobData = {
-      user_id:           ctx.chat.id,
-      script:            config.script || '',
-      videotype:         config.videotype,
-      duration:          config.duration,
-      voice:             config.voice,
-      content_flow:      config.content_flow  || 'news',
-      media_type:        config.media_type    || 'images',
-      status,
-      segments:          config.segments      || null,
-      media_queries:     config.media_queries || null,
-    };
+const jobData = {
+  user_id:       ctx.chat.id,
+  prompt:        userData.mode === 'prompt' ? userData.inputText : null,
+  script:        userData.mode === 'script' ? userData.inputText : null,
+  videotype:     userData.videotype,
+  duration:      userData.duration,
+  voice:         userData.voice,
+  content_flow:  userData.content_flow || 'news',
+  media_type:    userData.mediaType || 'images',
+  media_mode:    userData.mediaMode || 'auto',
+  add_captions:  userData.addCaptions || false,
+  caption_style: userData.captionStyle || null,
+};
 
     await ctx.reply(
       `📋 Configuration Summary:\n\n` +
