@@ -1778,20 +1778,21 @@ bot.on('callback_query', async (ctx) => {
   try {
     // ── Audio generation confirm ──────────────────────────────────────
 if (callbackData === 'confirm_audio_generate') {
-  await ctx.answerCbQuery('Generating your audio...');
+  await ctx.answerCbQuery('Processing...');
 
   const userData = userStates.get(ctx.chat.id) || {};
 
   if (!userData.pendingAudioText || !userData.voice) {
-    await ctx.editMessageText('❌ Session expired. Please use /start to begin again.');
+    await ctx.editMessageText(
+      '❌ Session expired. Please use /start to begin again.'
+    );
     return;
   }
 
-  const wordCount  = userData.pendingAudioWordCount ||
-                     userData.pendingAudioText.split(/\s+/).length;
-  const creditCost = calculateAudioCreditCost(wordCount);
+  const wordCount = userData.pendingAudioWordCount ||
+                    userData.pendingAudioText.split(/\s+/).length;
 
-  // Deduct credits
+  // ── Deduct credits first ──────────────────────────────────────
   const deduction = await tryDeductAudioCredits(ctx, wordCount);
 
   if (!deduction.success) {
@@ -1806,115 +1807,69 @@ if (callbackData === 'confirm_audio_generate') {
     return;
   }
 
-  await ctx.editMessageText(
-    `✅ *${deduction.creditCost} credit(s) deducted*\n` +
-    `💰 Remaining: *${deduction.remaining}*\n\n` +
-    `🎙️ Generating your audio with *${userData.voice}*...\n\n` +
-    `This may take a moment ⏳`,
-    { parse_mode: 'Markdown' }
-  );
-
-  // Create a job record so we can track it
-  let jobId;
-  try {
-    const jobResult = await pool.query(
-      `INSERT INTO jobs
-         (user_id, script, videotype, duration, voice, content_flow,
-          media_type, status, created_at, updated_at)
-       VALUES ($1, $2, 'longform', 1, $3, 'news', 'images', 'audio_only', NOW(), NOW())
-       RETURNING id`,
-      [ctx.chat.id, userData.pendingAudioText, userData.voice]
-    );
-    jobId = jobResult.rows[0].id;
-    console.log(`🎙️ Audio-only job created: ${jobId} for user ${ctx.chat.id}`);
-  } catch (dbErr) {
-    console.error('Failed to create audio job:', dbErr.message);
-    await ctx.reply('❌ Failed to start audio generation. Please try again.');
-    userStates.delete(ctx.chat.id);
-    return;
-  }
-
-  // Clear state before async work
+  // ── Capture before clearing state ────────────────────────────
   const audioText = userData.pendingAudioText;
   const voice     = userData.voice;
   userStates.delete(ctx.chat.id);
 
-  // Generate audio async — don't block the callback response
-  setImmediate(async () => {
-    try {
-      const { generateAudioFromText } = require('./audio-robot');
-
-      const { mergedUrl, totalDuration } = await generateAudioFromText(
-        audioText,
+  // ── POST to backend — worker picks it up from there ──────────
+  try {
+    const response = await axios.post(
+      `${BACKEND_BASE_URL}/generate-audio`,
+      {
+        user_id: ctx.chat.id,
+        text:    audioText,
         voice,
-        jobId
+      },
+      { timeout: 10000 }
+    );
+
+    if (response.data.success) {
+      const jobId = response.data.jobId;
+
+      await ctx.editMessageText(
+        `✅ *${deduction.creditCost} credit(s) deducted*\n` +
+        `💰 Remaining: *${deduction.remaining}*\n\n` +
+        `🎙️ Generating audio with *${voice}*...\n\n` +
+        `🆔 Job ID: \`${jobId}\`\n\n` +
+        `You'll receive your MP3 shortly ⏳`,
+        { parse_mode: 'Markdown' }
       );
 
-      // Mark job complete
-      await pool.query(
-        `UPDATE jobs SET status = 'completed', updated_at = NOW() WHERE id = $1`,
-        [jobId]
+      console.log(
+        `✅ Audio job ${jobId} submitted for user ${ctx.chat.id}`
       );
 
-      // Download and send the audio file
-      const response    = await axios.get(mergedUrl, { responseType: 'arraybuffer', timeout: 60000 });
-      const audioBuffer = Buffer.from(response.data);
-
-      await bot.telegram.sendAudio(
-        ctx.chat.id,
-        { source: audioBuffer, filename: `audio_${jobId}.mp3` },
-        {
-          caption:
-            `🎙️ *Your Audio is Ready!*\n\n` +
-            `🎤 Voice: *${voice}*\n` +
-            `⏱ Duration: *${totalDuration.toFixed(1)}s*\n` +
-            `🆔 Job ID: \`${jobId}\``,
-          parse_mode: 'Markdown',
-        }
-      );
-
-      console.log(`✅ Audio-only job ${jobId} delivered to user ${ctx.chat.id}`);
-
-    } catch (audioErr) {
-      console.error(`❌ Audio-only job ${jobId} failed:`, audioErr.message);
-
-      await pool.query(
-        `UPDATE jobs SET status = 'error', error_message = $1, updated_at = NOW() WHERE id = $2`,
-        [audioErr.message, jobId]
-      );
-
-      try {
-        await bot.telegram.sendMessage(
-          ctx.chat.id,
-          `❌ *Audio generation failed*\n\n` +
-          `Error: ${audioErr.message}\n\n` +
-          `Your credits have been refunded. Please try again or contact /support.`,
-          { parse_mode: 'Markdown' }
-        );
-
-        // Refund credits on failure
-        await setCredits(
-          ctx.chat.id,
-          deduction.creditCost,
-          `refund_audio_${jobId}`,
-          'audio_generation_failed'
-        );
-      } catch (notifyErr) {
-        console.error('Failed to notify user of audio error:', notifyErr.message);
-      }
+    } else {
+      throw new Error(response.data.error || 'Backend rejected the request');
     }
-  });
 
-  return;
-}
+  } catch (submitErr) {
+    console.error('Failed to submit audio job:', submitErr.message);
 
-// ── Audio generation cancel ───────────────────────────────────────
-if (callbackData === 'cancel_audio_generate') {
-  await ctx.answerCbQuery('Cancelled');
-  userStates.delete(ctx.chat.id);
-  await ctx.editMessageText(
-    '❌ Audio generation cancelled.\n\nUse /start to begin again.'
-  );
+    // ── Refund credits since job never started ────────────────
+    try {
+      await setCredits(
+        String(ctx.chat.id),
+        deduction.creditCost,
+        `refund_audio_submit_${Date.now()}`,
+        'audio_submit_failed'
+      );
+      console.log(
+        `💰 Refunded ${deduction.creditCost} credits to user ${ctx.chat.id}`
+      );
+    } catch (refundErr) {
+      console.error('Refund failed:', refundErr.message);
+    }
+
+    await ctx.editMessageText(
+      `❌ *Failed to start audio generation*\n\n` +
+      `Your *${deduction.creditCost}* credit(s) have been refunded.\n\n` +
+      `Please try again or contact /support.`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
   return;
 }
     
