@@ -100,13 +100,13 @@ async function initTrendTables() {
 // Subniche CRUD
 // ─────────────────────────────────────────────
 
-async function createSubniche({ name, description, content_type, created_by, is_public }) {
+async function createSubniche({ name, description, content_type, created_by }) {
   const { rows } = await pool.query(
     `INSERT INTO trend_subniches
        (name, description, content_type, created_by, is_public)
-     VALUES ($1, $2, $3, $4, $5)
+     VALUES ($1, $2, $3, $4, TRUE)
      RETURNING *`,
-    [name, description || null, content_type || 'videos', created_by || null, is_public || false]
+    [name, description || null, content_type || 'videos', created_by || null]
   );
   return rows[0];
 }
@@ -149,15 +149,13 @@ async function getUserSubniches(telegram_id) {
 }
 
 // All subniches a user can access — public ones + their own private ones
-async function getAccessibleSubniches(telegram_id) {
+async function getAllSubniches() {
   const { rows } = await pool.query(
     `SELECT s.*, COUNT(c.id)::int AS channel_count
      FROM trend_subniches s
      LEFT JOIN trend_channels c ON c.subniche_id = s.id
-     WHERE s.is_public = TRUE OR s.created_by = $1
      GROUP BY s.id
-     ORDER BY s.is_public DESC, s.created_at ASC`,
-    [telegram_id]
+     ORDER BY s.created_at ASC`
   );
   return rows;
 }
@@ -315,9 +313,7 @@ module.exports = {
   initTrendTables,
   createSubniche,
   getSubnicheById,
-  getPublicSubniches,
-  getUserSubniches,
-  getAccessibleSubniches,
+  getAllSubniches,          // ← replaces the three above
   updateSubnicheChannelCount,
   addChannel,
   getChannelsForSubniche,
