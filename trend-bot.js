@@ -9,7 +9,7 @@ const {
   initTrendTables,
   createSubniche,
   getSubnicheById,
-  getAccessibleSubniches,
+  getAllSubniches,
   getChannelsForSubniche,
   addChannel,
   isCachedToday,
@@ -148,7 +148,7 @@ function setupTrendBot(bot, userStates) {
   // ── /trends command and button entry point ──────────────────────
   async function showTrendingHome(ctx) {
     const chatId    = ctx.chat?.id || ctx.from?.id;
-    const subniches = await getAccessibleSubniches(chatId);
+    const subniches = await getAllSubniches(chatId);
 
     if (subniches.length === 0) {
       const message =
@@ -206,7 +206,7 @@ function setupTrendBot(bot, userStates) {
     await ctx.answerCbQuery();
     const page      = parseInt(ctx.match[1]);
     const chatId    = ctx.from.id;
-    const subniches = await getAccessibleSubniches(chatId);
+    const subniches = await getAllSubniches(chatId);
 
     if (subniches.length === 0) {
       return showTrendingHome(ctx);
@@ -756,38 +756,65 @@ async function finishChannelCollection(ctx, userData, chatId) {
     return true;
   }
 
-  trendFlow.step = 'visibility';
-  userStates.set(chatId, userData);
+  // ── No visibility step — save immediately as public ──────────────
+  try {
+    const subniche = await createSubniche({
+      name:         trendFlow.name,
+      content_type: trendFlow.content_type || 'videos',
+      created_by:   chatId,
+    });
 
-  const channelList = trendFlow.resolvedChannels
-    .map(ch => `• ${ch.channel_name}`)
-    .join('\n');
+    for (const ch of trendFlow.resolvedChannels) {
+      await addChannel({
+        subniche_id:       subniche.id,
+        channel_id:        ch.channel_id,
+        resolved_id:       ch.resolved_id,
+        channel_name:      ch.channel_name,
+        channel_thumbnail: ch.channel_thumbnail,
+        added_by:          chatId,
+      });
+    }
 
-  const summaryText =
-    `📋 *Template Summary*\n\n` +
-    `*Name:* ${trendFlow.name}\n` +
-    `*Type:* ${trendFlow.content_type === 'shorts' ? '📱 Shorts' : '🎬 Longform'}\n` +
-    `*Channels (${trendFlow.resolvedChannels.length}):*\n${channelList}\n\n` +
-    `Make this template available to all users?`;
+    delete userData.trendFlow;
+    userStates.set(chatId, userData);
 
-  const keyboard = {
-    inline_keyboard: [
-      [
-        { text: '🌍 Yes — Make Public', callback_data: 'trend_visibility_public'  },
-        { text: '🔒 Keep Private',      callback_data: 'trend_visibility_private' },
+    const channelList = trendFlow.resolvedChannels
+      .map(ch => `• ${ch.channel_name}`)
+      .join('\n');
+
+    const summaryText =
+      `🎉 *Template Created!*\n\n` +
+      `📋 *Name:* ${trendFlow.name}\n` +
+      `*Type:* ${trendFlow.content_type === 'shorts' ? '📱 Shorts' : '🎬 Longform'}\n` +
+      `🌍 Public — visible to all users\n\n` +
+      `*Channels tracked (${trendFlow.resolvedChannels.length}):*\n${channelList}\n\n` +
+      `Tap below to see what's trending now:`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [{ text: '🔥 See Trending Now', callback_data: `trend_view_${subniche.id}_0` }],
+        [{ text: '📈 All Templates',    callback_data: 'trend_list_0'               }],
       ]
-    ]
-  };
+    };
 
-  if (ctx.callbackQuery) {
-    await ctx.editMessageText(summaryText, { parse_mode: 'Markdown', reply_markup: keyboard });
-  } else {
-    await ctx.reply(summaryText, { parse_mode: 'Markdown', reply_markup: keyboard });
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(summaryText, { parse_mode: 'Markdown', reply_markup: keyboard });
+    } else {
+      await ctx.reply(summaryText, { parse_mode: 'Markdown', reply_markup: keyboard });
+    }
+
+  } catch (err) {
+    console.error('❌ [trend-bot] Error creating subniche:', err.message);
+    const errorText = `❌ *Failed to create template*\n\nError: ${err.message}\n\nPlease try again.`;
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(errorText, { parse_mode: 'Markdown' });
+    } else {
+      await ctx.reply(errorText, { parse_mode: 'Markdown' });
+    }
   }
 
   return true;
 }
-
 // ─────────────────────────────────────────────
 // Extract a usable channel identifier from
 // various input formats users might send
