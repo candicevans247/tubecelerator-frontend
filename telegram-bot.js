@@ -10,14 +10,6 @@ const { setupTrendBot, initTrendTables } = require('./trend-bot');
 
 // Main bot — official API — handles ALL updates and file downloads
 const bot = new Telegraf(process.env.BOT_TOKEN);
-// No apiRoot here — uses api.telegram.org by default
-
-const { handleTrendFlowText, showTrendingHome } = setupTrendBot(bot, userStates);
-
-// Initialize trend tables on startup
-initTrendTables().catch(err => 
-  console.error('❌ Failed to init trend tables:', err.message)
-);
 
 // Separate client — local API — ONLY for sending large files out
 const { Telegram } = require('telegraf');
@@ -34,6 +26,22 @@ console.log(localTelegram
 
 const { getUserSession, setUserSession, createSessionIfNotExists } = require('./sessions');
 const { initCreditsTable, setCredits, getCredits, useCredits, calculateCreditCost, areCreditsExpired } = require('./credits');
+
+// ─────────────────────────────────────────────
+// userStates must be defined BEFORE setupTrendBot
+// because setupTrendBot captures the reference
+// ─────────────────────────────────────────────
+const userStates     = new Map();
+const scriptTimeouts = new Map();
+const SCRIPT_BUFFER_TIMEOUT = 15000;
+
+// Now safe to call — userStates exists
+const { handleTrendFlowText, showTrendingHome } = setupTrendBot(bot, userStates);
+
+// Initialize trend tables on startup
+initTrendTables().catch(err =>
+  console.error('❌ Failed to init trend tables:', err.message)
+);
 
 
 function getTelegramFileUrl(filePath) {
@@ -319,10 +327,6 @@ const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'https://your-backend.r
 const ADMIN_IDS = [541812135, 7948746526, 5426162126];
 
 const APPROVAL_REQUIRED_USER = 6646033752;
-
-const userStates     = new Map();
-const scriptTimeouts = new Map();
-const SCRIPT_BUFFER_TIMEOUT = 15000;
 
 // ============================================
 // 🔔 WORKER COMMUNICATION
@@ -1149,15 +1153,15 @@ bot.start(async (ctx) => {
     firstName: ctx.from.first_name || null,
   });
 
-// In bot.start(), change the keyboard to:
-return ctx.reply(
-  '👋 Welcome! What would you like to do?',
-  Markup.keyboard([
-    ['🎬 Create Video'],
-    ['🎙️ Generate Audio Only'],
-    ['📈 Trending Topics'],       // ← new button
-  ]).oneTime().resize()
-);
+  return ctx.reply(
+    '👋 Welcome! What would you like to do?',
+    Markup.keyboard([
+      ['🎬 Create Video'],
+      ['🎙️ Generate Audio Only'],
+      ['📈 Trending Topics'],
+    ]).oneTime().resize()
+  );
+}); 
 
 // ─────────────────────────────────────────────
 // Top-level routing — Video vs Audio Only
@@ -1178,8 +1182,8 @@ bot.hears('🎬 Create Video', async (ctx) => {
 
 bot.hears('🎙️ Generate Audio Only', async (ctx) => {
   const userData = userStates.get(ctx.chat.id) || {};
-  userData.topLevelFlow    = 'audio';
-  userData.awaitingAudioText = true;   // ← THIS IS THE MISSING FLAG
+  userData.topLevelFlow      = 'audio';
+  userData.awaitingAudioText = true;
   userStates.set(ctx.chat.id, userData);
 
   return ctx.reply(
