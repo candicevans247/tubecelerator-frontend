@@ -225,84 +225,38 @@ function setupTrendBot(bot, userStates) {
 
   // ── View trending results for a subniche ───────────────────────
   bot.action(/^trend_view_(\d+)_(\d+)$/, async (ctx) => {
-    await ctx.answerCbQuery('Loading...');
+  await ctx.answerCbQuery('Loading...');
 
-    const subniche_id    = parseInt(ctx.match[1]);
-    const resultIndex    = parseInt(ctx.match[2]);
-    const chatId         = ctx.from.id;
+  const subniche_id = parseInt(ctx.match[1]);
+  const resultIndex = parseInt(ctx.match[2]);
+  const chatId      = ctx.from.id;
 
-    const subniche = await getSubnicheById(subniche_id);
-    if (!subniche) {
-      return ctx.answerCbQuery('Template not found', true);
-    }
+  const subniche = await getSubnicheById(subniche_id);
+  if (!subniche) {
+    return ctx.answerCbQuery('Template not found', true);
+  }
 
-    // ── Check cache state ─────────────────────────────────────────
-    const cached = await isCachedToday(subniche_id);
+  // ── Deduct 5 credits before doing anything ─────────────────────
+  // Applies whether results come from cache or a fresh fetch.
+  // Navigation between results (Next/Prev) does NOT re-charge —
+  // only the initial view trigger (resultIndex === 0) costs credits.
+  if (resultIndex === 0) {
+    const { getCredits, useCredits } = require('./credits');
+    const TREND_CREDIT_COST = 5;
 
-    if (!cached) {
-      // Check if a fetch is already running (another user triggered it)
-      const inProgress = await isFetchInProgress(subniche_id);
+    const creditInfo     = await getCredits(chatId);
+    const currentCredits = typeof creditInfo === 'object'
+      ? creditInfo.amount
+      : creditInfo;
 
-      if (inProgress) {
-        await ctx.editMessageText(
-          `⏳ *Fetching trending videos for "${escapeMarkdown(subniche.name)}"\\.\\.\\.*\n\n` +
-          `Someone else triggered a fetch moments ago\\. ` +
-          `Results will be ready in about a minute\\. ` +
-          `Tap below to check again\\.`,
-          {
-            parse_mode:   'MarkdownV2',
-            reply_markup: {
-              inline_keyboard: [[
-                { text: '🔄 Check Again', callback_data: `trend_view_${subniche_id}_0` },
-                { text: '🔙 Back',        callback_data: 'trend_list_0'                }
-              ]]
-            }
-          }
-        );
-        return;
-      }
-
-      // No cache, no fetch in progress — trigger a fresh fetch
+    if (currentCredits < TREND_CREDIT_COST) {
       await ctx.editMessageText(
-        `🔍 *Fetching trending videos for "${escapeMarkdown(subniche.name)}"\\.\\.\\.*\n\n` +
-        `Scanning ${subniche.channel_count} competitor channel(s) for viral content ` +
-        `from the last 30 days\\. This takes about 30\\-60 seconds\\.`,
-        { parse_mode: 'MarkdownV2' }
-      );
-
-      try {
-        await fetchAndCacheTrending(subniche_id, chatId);
-      } catch (fetchErr) {
-        console.error(`❌ [trend-bot] Fetch failed for subniche ${subniche_id}:`, fetchErr.message);
-        await ctx.editMessageText(
-          `❌ *Failed to fetch trending videos*\n\n` +
-          `Error: ${escapeMarkdown(fetchErr.message)}\n\n` +
-          `Please try again or contact /support`,
-          {
-            parse_mode:   'MarkdownV2',
-            reply_markup: {
-              inline_keyboard: [[
-                { text: '🔄 Try Again', callback_data: `trend_view_${subniche_id}_0` },
-                { text: '🔙 Back',      callback_data: 'trend_list_0'                }
-              ]]
-            }
-          }
-        );
-        return;
-      }
-    }
-
-    // ── Serve from cache ─────────────────────────────────────────
-    const results = await getCachedTrending(subniche_id, 20);
-
-    if (results.length === 0) {
-      await ctx.editMessageText(
-        `😕 *No trending videos found for "${escapeMarkdown(subniche.name)}"*\n\n` +
-        `None of the tracked channels posted videos in the last 30 days that ` +
-        `exceeded their baseline performance\\.\n\n` +
-        `Try again tomorrow when new videos have been posted\\.`,
+        `❌ *Insufficient Credits*\n\n` +
+        `Viewing trending topics costs *${TREND_CREDIT_COST} credits* per request.\n` +
+        `You have: *${currentCredits} credit(s)*\n\n` +
+        `Contact /support to top up.`,
         {
-          parse_mode:   'MarkdownV2',
+          parse_mode:   'Markdown',
           reply_markup: {
             inline_keyboard: [[
               { text: '🔙 Back to Templates', callback_data: 'trend_list_0' }
@@ -313,42 +267,212 @@ function setupTrendBot(bot, userStates) {
       return;
     }
 
-    // Show the result at the requested index
-    const safeIndex = Math.min(resultIndex, results.length - 1);
-    const item      = results[safeIndex];
-    const message   = buildTrendingItemMessage(item, safeIndex + 1, results.length);
-    const keyboard  = buildResultKeyboard(item, safeIndex, results.length, subniche_id);
-
-    // Send thumbnail if available, otherwise text only
-    if (item.thumbnail) {
-      try {
-        // Try to edit as text first (we may be on a text message from the loading state)
-        await ctx.editMessageText(message, {
+    const deduction = await useCredits(chatId, TREND_CREDIT_COST);
+    if (!deduction.success) {
+      await ctx.editMessageText(
+        `❌ *Could not deduct credits*\n\n${deduction.reason}\n\nContact /support.`,
+        {
           parse_mode:   'Markdown',
-          reply_markup: keyboard
-        });
-      } catch (editErr) {
-        // If editing fails (message type mismatch), send new message
-        await ctx.reply(message, {
-          parse_mode:   'Markdown',
-          reply_markup: keyboard
-        });
-      }
-    } else {
-      try {
-        await ctx.editMessageText(message, {
-          parse_mode:   'Markdown',
-          reply_markup: keyboard
-        });
-      } catch (editErr) {
-        await ctx.reply(message, {
-          parse_mode:   'Markdown',
-          reply_markup: keyboard
-        });
-      }
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '🔙 Back to Templates', callback_data: 'trend_list_0' }
+            ]]
+          }
+        }
+      );
+      return;
     }
-  });
 
+    console.log(
+      `💰 [trend-bot] ${TREND_CREDIT_COST} credits deducted from user ${chatId} ` +
+      `for trending view — subniche ${subniche_id} | remaining: ${deduction.remaining}`
+    );
+  }
+
+  // ── Check cache state ─────────────────────────────────────────
+  const cached = await isCachedToday(subniche_id);
+
+  if (!cached) {
+    const inProgress = await isFetchInProgress(subniche_id);
+
+    if (inProgress) {
+      await ctx.editMessageText(
+        `⏳ *Fetching trending videos for "${escapeMarkdown(subniche.name)}"\\.\\.\\.*\n\n` +
+        `Someone else triggered a fetch moments ago\\. ` +
+        `Results will be ready in about a minute\\. ` +
+        `Tap below to check again\\.\n\n` +
+        `_Note: checking again will not charge another 5 credits\\._`,
+        {
+          parse_mode:   'MarkdownV2',
+          reply_markup: {
+            inline_keyboard: [[
+              // resultIndex 1 here so the re-check doesn't charge again
+              { text: '🔄 Check Again', callback_data: `trend_recheck_${subniche_id}` },
+              { text: '🔙 Back',        callback_data: 'trend_list_0'                  }
+            ]]
+          }
+        }
+      );
+      return;
+    }
+
+    // No cache — trigger fresh fetch
+    await ctx.editMessageText(
+      `🔍 *Fetching trending videos for "${escapeMarkdown(subniche.name)}"\\.\\.\\.*\n\n` +
+      `Scanning ${subniche.channel_count} competitor channel(s) for viral content ` +
+      `from the last 30 days\\. This takes about 30\\-60 seconds\\.`,
+      { parse_mode: 'MarkdownV2' }
+    );
+
+    try {
+      await fetchAndCacheTrending(subniche_id, chatId);
+    } catch (fetchErr) {
+      console.error(
+        `❌ [trend-bot] Fetch failed for subniche ${subniche_id}:`,
+        fetchErr.message
+      );
+
+      // Fetch failed — refund the 5 credits since user got nothing
+      try {
+        const { setCredits } = require('./credits');
+        await setCredits(
+          String(chatId),
+          5,
+          `refund_trend_${subniche_id}_${Date.now()}`,
+          'trend_fetch_failed'
+        );
+        console.log(`💰 [trend-bot] Refunded 5 credits to user ${chatId} — fetch failed`);
+      } catch (refundErr) {
+        console.error(`❌ [trend-bot] Refund failed:`, refundErr.message);
+      }
+
+      await ctx.editMessageText(
+        `❌ *Failed to fetch trending videos*\n\n` +
+        `Error: ${escapeMarkdown(fetchErr.message)}\n\n` +
+        `Your 5 credits have been refunded\\.\n\n` +
+        `Please try again or contact /support`,
+        {
+          parse_mode:   'MarkdownV2',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '🔄 Try Again', callback_data: `trend_view_${subniche_id}_0` },
+              { text: '🔙 Back',      callback_data: 'trend_list_0'                }
+            ]]
+          }
+        }
+      );
+      return;
+    }
+  }
+
+  // ── Serve results ─────────────────────────────────────────────
+  const results = await getCachedTrending(subniche_id, 20);
+
+  if (results.length === 0) {
+    await ctx.editMessageText(
+      `😕 *No trending videos found for "${escapeMarkdown(subniche.name)}"*\n\n` +
+      `None of the tracked channels posted videos in the last 30 days that ` +
+      `exceeded their baseline performance\\.\n\n` +
+      `Try again tomorrow when new videos have been posted\\.`,
+      {
+        parse_mode:   'MarkdownV2',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🔙 Back to Templates', callback_data: 'trend_list_0' }
+          ]]
+        }
+      }
+    );
+    return;
+  }
+
+  const safeIndex = Math.min(resultIndex, results.length - 1);
+  const item      = results[safeIndex];
+  const message   = buildTrendingItemMessage(item, safeIndex + 1, results.length);
+  const keyboard  = buildResultKeyboard(item, safeIndex, results.length, subniche_id);
+
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  } catch (editErr) {
+    await ctx.reply(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  }
+});
+
+  // No credit charge on recheck — user already paid
+bot.action(/^trend_recheck_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery('Checking...');
+
+  const subniche_id = parseInt(ctx.match[1]);
+  const subniche    = await getSubnicheById(subniche_id);
+  if (!subniche) return ctx.answerCbQuery('Template not found', true);
+
+  const cached     = await isCachedToday(subniche_id);
+  const inProgress = await isFetchInProgress(subniche_id);
+
+  if (!cached && inProgress) {
+    // Still running — tell them to wait a bit more
+    await ctx.answerCbQuery('Still fetching, please wait a moment...', true);
+    return;
+  }
+
+  if (!cached && !inProgress) {
+    // Fetch crashed without completing — show error
+    await ctx.editMessageText(
+      `❌ *Fetch did not complete*\n\n` +
+      `Something went wrong during the fetch\\. ` +
+      `Please tap Try Again — your original 5 credits were refunded\\.`,
+      {
+        parse_mode:   'MarkdownV2',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🔄 Try Again', callback_data: `trend_view_${subniche_id}_0` },
+            { text: '🔙 Back',      callback_data: 'trend_list_0'                }
+          ]]
+        }
+      }
+    );
+    return;
+  }
+
+  // Cache is ready — show results (no charge, use index 1 to skip credit block)
+  const results = await getCachedTrending(subniche_id, 20);
+  if (results.length === 0) {
+    await ctx.editMessageText(
+      `😕 *No trending videos found*\n\nTry again tomorrow\\.`,
+      {
+        parse_mode:   'MarkdownV2',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🔙 Back to Templates', callback_data: 'trend_list_0' }
+          ]]
+        }
+      }
+    );
+    return;
+  }
+
+  const item    = results[0];
+  const message = buildTrendingItemMessage(item, 1, results.length);
+  const keyboard = buildResultKeyboard(item, 0, results.length, subniche_id);
+
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  } catch (e) {
+    await ctx.reply(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  }
+});
   // ── Create video from trending topic ───────────────────────────
   bot.action(/^trend_create_video_(.+)_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery('Loading video details...');
