@@ -737,7 +737,7 @@ function setupTrendBot(bot, userStates) {
   });
 
   // Return the text handler so telegram-bot.js can call it
-  return { handleTrendFlowText };
+   return { handleTrendFlowText, showTrendingHome };
 }
 
 // ─────────────────────────────────────────────
