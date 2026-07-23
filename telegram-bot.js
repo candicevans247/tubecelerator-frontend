@@ -6,10 +6,18 @@ const pool = require('./db');
 const fs = require('fs');
 const path = require('path');
 const { uploadFile, deleteFile, getFileUrl } = require('./storage');
+const { setupTrendBot, initTrendTables } = require('./trend-bot');
 
 // Main bot — official API — handles ALL updates and file downloads
 const bot = new Telegraf(process.env.BOT_TOKEN);
 // No apiRoot here — uses api.telegram.org by default
+
+const { handleTrendFlowText } = setupTrendBot(bot, userStates);
+
+// Initialize trend tables on startup
+initTrendTables().catch(err => 
+  console.error('❌ Failed to init trend tables:', err.message)
+);
 
 // Separate client — local API — ONLY for sending large files out
 const { Telegram } = require('telegraf');
@@ -1142,14 +1150,14 @@ bot.start(async (ctx) => {
   });
 
   return ctx.reply(
-    '👋 Welcome! What would you like to create?',
-    Markup.keyboard([
-      ['🎬 Create Video'],
-      ['🎙️ Generate Audio Only'],
-    ]).oneTime().resize()
-  );
-});
-
+  '👋 Welcome! What would you like to create?',
+  Markup.keyboard([
+    ['🎬 Create Video'],
+    ['🎙️ Generate Audio Only'],
+    ['📈 Trending Topics'],      
+  ]).oneTime().resize()
+);
+  
 // ─────────────────────────────────────────────
 // Top-level routing — Video vs Audio Only
 // ─────────────────────────────────────────────
@@ -1183,6 +1191,15 @@ bot.hears('🎙️ Generate Audio Only', async (ctx) => {
       ...Markup.keyboard([['❌ Cancel']]).oneTime().resize()
     }
   );
+});
+
+const { handleTrendFlowText, showTrendingHome } = setupTrendBot(bot, userStates);
+
+bot.hears('📈 Trending Topics', async (ctx) => {
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.topLevelFlow = 'trends';
+  userStates.set(ctx.chat.id, userData);
+  await showTrendingHome(ctx);
 });
 
 bot.hears(['📰 Essay Styled Videos', '📋 Listicle Videos'], async (ctx) => {
@@ -2567,6 +2584,12 @@ bot.on('text', async (ctx) => {
   if (userData.awaitingQuickVideo && isAdmin(ctx)) {
     await handleQuickVideoJSON(ctx, userData, message);
     return;
+  }
+
+    // ── Trending template creation flow ──  ← ADD THIS
+  if (userData.trendFlow) {
+    const handled = await handleTrendFlowText(ctx, userData, message);
+    if (handled) return;
   }
 
   // ── Script editing ────────────────────────────────────────────────
