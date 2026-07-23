@@ -12,7 +12,7 @@ const { setupTrendBot, initTrendTables } = require('./trend-bot');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 // No apiRoot here — uses api.telegram.org by default
 
-const { handleTrendFlowText } = setupTrendBot(bot, userStates);
+const { handleTrendFlowText, showTrendingHome } = setupTrendBot(bot, userStates);
 
 // Initialize trend tables on startup
 initTrendTables().catch(err => 
@@ -1149,15 +1149,16 @@ bot.start(async (ctx) => {
     firstName: ctx.from.first_name || null,
   });
 
-  return ctx.reply(
-  '👋 Welcome! What would you like to create?',
+// In bot.start(), change the keyboard to:
+return ctx.reply(
+  '👋 Welcome! What would you like to do?',
   Markup.keyboard([
     ['🎬 Create Video'],
     ['🎙️ Generate Audio Only'],
-    ['📈 Trending Topics'],      
+    ['📈 Trending Topics'],       // ← new button
   ]).oneTime().resize()
 );
-  
+
 // ─────────────────────────────────────────────
 // Top-level routing — Video vs Audio Only
 // ─────────────────────────────────────────────
@@ -1193,15 +1194,13 @@ bot.hears('🎙️ Generate Audio Only', async (ctx) => {
   );
 });
 
-const { handleTrendFlowText, showTrendingHome } = setupTrendBot(bot, userStates);
-
 bot.hears('📈 Trending Topics', async (ctx) => {
   const userData = userStates.get(ctx.chat.id) || {};
   userData.topLevelFlow = 'trends';
   userStates.set(ctx.chat.id, userData);
   await showTrendingHome(ctx);
 });
-
+  
 bot.hears(['📰 Essay Styled Videos', '📋 Listicle Videos'], async (ctx) => {
   const userData    = userStates.get(ctx.chat.id) || {};
   const contentFlow = ctx.message.text === '📰 Essay Styled Videos' ? 'news' : 'listicle';
@@ -2586,12 +2585,12 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-    // ── Trending template creation flow ──  ← ADD THIS
+    // ── Trending template creation flow ──
   if (userData.trendFlow) {
     const handled = await handleTrendFlowText(ctx, userData, message);
     if (handled) return;
   }
-
+  
   // ── Script editing ────────────────────────────────────────────────
   if (userData.editingScript) {
     const jobId = userData.editingScript;
