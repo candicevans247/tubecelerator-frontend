@@ -432,19 +432,11 @@ const item      = results[safeIndex];
 const message   = buildTrendingItemMessage(item, safeIndex + 1, results.length);
 const keyboard  = buildResultKeyboard(item, safeIndex, results.length, subniche_id);
 
-// ── Send with thumbnail if available ─────────────────────────────
-// On first load (resultIndex === 0) we're editing a text message
-// so we can't edit it into a photo — send a new photo message.
-// On navigation (Next/Prev) we're already on a photo message
-// so we can edit the caption directly.
 if (item.thumbnail) {
   if (resultIndex === 0) {
-    // Coming from a text message — delete old, send new photo
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      // If delete fails (too old etc.) just continue
-    }
+    // First load — coming from a text message, can't edit to photo
+    // Must delete and send fresh
+    try { await ctx.deleteMessage(); } catch (e) {}
     await ctx.replyWithPhoto(
       { url: item.thumbnail },
       {
@@ -454,14 +446,21 @@ if (item.thumbnail) {
       }
     );
   } else {
-    // Already on a photo message — edit caption and keyboard
+    // Navigation — already on a photo message
+    // Use editMessageMedia to swap both the image and caption atomically
     try {
-      await ctx.editMessageCaption(message, {
-        parse_mode:   'Markdown',
-        reply_markup: keyboard
-      });
+      await ctx.editMessageMedia(
+        {
+          type:      'photo',
+          media:     item.thumbnail,
+          caption:   message,
+          parse_mode: 'Markdown',
+        },
+        { reply_markup: keyboard }
+      );
     } catch (editErr) {
-      // If edit fails, send fresh photo
+      // Fallback — delete and resend if editMessageMedia fails
+      console.warn(`⚠️ editMessageMedia failed: ${editErr.message} — falling back to resend`);
       try { await ctx.deleteMessage(); } catch (e) {}
       await ctx.replyWithPhoto(
         { url: item.thumbnail },
@@ -474,7 +473,7 @@ if (item.thumbnail) {
     }
   }
 } else {
-  // No thumbnail — fall back to text message
+  // No thumbnail — plain text
   try {
     await ctx.editMessageText(message, {
       parse_mode:   'Markdown',
