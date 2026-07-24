@@ -24,10 +24,11 @@ const {
 // ─────────────────────────────────────────────
 
 function formatViralScore(score) {
-  if (score >= 10) return '🔥🔥🔥 ' + score.toFixed(1) + 'x';
-  if (score >= 5)  return '🔥🔥 '   + score.toFixed(1) + 'x';
-  if (score >= 2)  return '🔥 '     + score.toFixed(1) + 'x';
-  return '📈 ' + score.toFixed(1) + 'x';
+  const s = parseFloat(score) || 0;  // ← convert string to number
+  if (s >= 10) return '🔥🔥🔥 ' + s.toFixed(1) + 'x';
+  if (s >= 5)  return '🔥🔥 '   + s.toFixed(1) + 'x';
+  if (s >= 2)  return '🔥 '     + s.toFixed(1) + 'x';
+  return '📈 ' + s.toFixed(1) + 'x';
 }
 
 function formatDuration(seconds) {
@@ -45,16 +46,17 @@ function escapeMarkdown(text) {
 function buildTrendingItemMessage(item, rank, total) {
   const scoreLabel = formatViralScore(item.viral_score);
   const duration   = item.is_short ? '📱 Short' : `⏱ ${formatDuration(item.duration_seconds)}`;
+  const baseline   = Number(item.channel_baseline) || 0;  // ← cast to number
 
   return (
     `*#${rank} of ${total}*\n\n` +
     `📺 *${item.title.replace(/[*_[\]()~`>#+\-=|{}.!\\]/g, '\\$&')}*\n\n` +
     `${scoreLabel} above channel average\n` +
-    `👁 ${item.view_count_text || item.view_count.toLocaleString()} views\n` +
+    `👁 ${item.view_count_text || Number(item.view_count).toLocaleString()} views\n` +
     `📅 ${item.published_time_text}\n` +
     `${duration}\n` +
     `📢 Channel: ${item.channel_name}\n\n` +
-    `💡 *Baseline for this channel:* ${Number(item.channel_baseline).toLocaleString()} views`
+    `💡 *Baseline for this channel:* ${baseline.toLocaleString()} views`
   );
 }
 
