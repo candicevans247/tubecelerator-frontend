@@ -487,7 +487,7 @@ if (item.thumbnail) {
     });
   }
 }
-    
+  });
 
   // ── Recheck handler — no credit charge ─────────────────────────
   bot.action(/^trend_recheck_(\d+)$/, async (ctx) => {
@@ -569,6 +569,7 @@ if (item.thumbnail) {
     });
   }
 }
+  });
 
   // ── Create video from trending topic ───────────────────────────
   bot.action(/^trend_create_video_(.+)_(\d+)$/, async (ctx) => {
