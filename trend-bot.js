@@ -46,7 +46,7 @@ function escapeMarkdown(text) {
 function buildTrendingItemMessage(item, rank, total) {
   const scoreLabel = formatViralScore(item.viral_score);
   const duration   = item.is_short ? '📱 Short' : `⏱ ${formatDuration(item.duration_seconds)}`;
-  const baseline   = Number(item.channel_baseline) || 0;  // ← cast to number
+  const baseline   = Number(item.channel_baseline) || 0;
 
   return (
     `*#${rank} of ${total}*\n\n` +
@@ -56,7 +56,8 @@ function buildTrendingItemMessage(item, rank, total) {
     `📅 ${item.published_time_text}\n` +
     `${duration}\n` +
     `📢 Channel: ${item.channel_name}\n\n` +
-    `💡 *Baseline for this channel:* ${baseline.toLocaleString()} views`
+    `💡 *Baseline:* ${baseline.toLocaleString()} views\n\n` +
+    `🔗 [Watch on YouTube](${item.url})`   // ← add this line
   );
 }
 
@@ -426,23 +427,67 @@ function setupTrendBot(bot, userStates) {
       return;
     }
 
-    const safeIndex = Math.min(resultIndex, results.length - 1);
-    const item      = results[safeIndex];
-    const message   = buildTrendingItemMessage(item, safeIndex + 1, results.length);
-    const keyboard  = buildResultKeyboard(item, safeIndex, results.length, subniche_id);
+const safeIndex = Math.min(resultIndex, results.length - 1);
+const item      = results[safeIndex];
+const message   = buildTrendingItemMessage(item, safeIndex + 1, results.length);
+const keyboard  = buildResultKeyboard(item, safeIndex, results.length, subniche_id);
 
+// ── Send with thumbnail if available ─────────────────────────────
+// On first load (resultIndex === 0) we're editing a text message
+// so we can't edit it into a photo — send a new photo message.
+// On navigation (Next/Prev) we're already on a photo message
+// so we can edit the caption directly.
+if (item.thumbnail) {
+  if (resultIndex === 0) {
+    // Coming from a text message — delete old, send new photo
     try {
-      await ctx.editMessageText(message, {
-        parse_mode:   'Markdown',
-        reply_markup: keyboard
-      });
+      await ctx.deleteMessage();
     } catch (e) {
-      await ctx.reply(message, {
+      // If delete fails (too old etc.) just continue
+    }
+    await ctx.replyWithPhoto(
+      { url: item.thumbnail },
+      {
+        caption:      message,
+        parse_mode:   'Markdown',
+        reply_markup: keyboard
+      }
+    );
+  } else {
+    // Already on a photo message — edit caption and keyboard
+    try {
+      await ctx.editMessageCaption(message, {
         parse_mode:   'Markdown',
         reply_markup: keyboard
       });
+    } catch (editErr) {
+      // If edit fails, send fresh photo
+      try { await ctx.deleteMessage(); } catch (e) {}
+      await ctx.replyWithPhoto(
+        { url: item.thumbnail },
+        {
+          caption:      message,
+          parse_mode:   'Markdown',
+          reply_markup: keyboard
+        }
+      );
     }
-  });
+  }
+} else {
+  // No thumbnail — fall back to text message
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  } catch (e) {
+    await ctx.reply(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  }
+}
+    
 
   // ── Recheck handler — no credit charge ─────────────────────────
   bot.action(/^trend_recheck_(\d+)$/, async (ctx) => {
@@ -497,22 +542,33 @@ function setupTrendBot(bot, userStates) {
       return;
     }
 
-    const item     = results[0];
-    const message  = buildTrendingItemMessage(item, 1, results.length);
-    const keyboard = buildResultKeyboard(item, 0, results.length, subniche_id);
+const item     = results[0];
+const message  = buildTrendingItemMessage(item, 1, results.length);
+const keyboard = buildResultKeyboard(item, 0, results.length, subniche_id);
 
-    try {
-      await ctx.editMessageText(message, {
-        parse_mode:   'Markdown',
-        reply_markup: keyboard
-      });
-    } catch (e) {
-      await ctx.reply(message, {
-        parse_mode:   'Markdown',
-        reply_markup: keyboard
-      });
+if (item.thumbnail) {
+  try { await ctx.deleteMessage(); } catch (e) {}
+  await ctx.replyWithPhoto(
+    { url: item.thumbnail },
+    {
+      caption:      message,
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
     }
-  });
+  );
+} else {
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  } catch (e) {
+    await ctx.reply(message, {
+      parse_mode:   'Markdown',
+      reply_markup: keyboard
+    });
+  }
+}
 
   // ── Create video from trending topic ───────────────────────────
   bot.action(/^trend_create_video_(.+)_(\d+)$/, async (ctx) => {
