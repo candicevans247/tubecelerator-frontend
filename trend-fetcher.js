@@ -153,8 +153,16 @@ async function fetchChannelPage(channel_id, content_type, continuation = null) {
   const params = { sort_by: 'newest' };
   if (continuation) params.continuation = continuation;
 
+  // ScrapeBadger requires this opt-in param to resolve publish dates
+  // for shorts — without it published_at is always null because
+  // YouTube's shorts grid renderer does not include dates natively.
+  // Adds ~5s per page but is necessary for recency filtering.
+  if (content_type === 'shorts') {
+    params.include_published_at = true;
+  }
+
   const { data } = await sbClient.get(endpoint, { params });
-  return data; // { channel_id, items, continuation }
+  return data;
 }
 
 // ─────────────────────────────────────────────
