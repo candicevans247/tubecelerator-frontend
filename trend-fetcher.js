@@ -55,6 +55,13 @@ function parseRelativeDate(text) {
 
   if (t === 'just now' || t === 'moments ago') return new Date();
 
+  // ISO 8601 timestamp — e.g. "2026-05-30T00:00:00Z"
+  // This is what the shorts endpoint returns in published_at
+  if (text.includes('T') && (text.includes('Z') || text.includes('+'))) {
+    const iso = new Date(text);
+    if (!isNaN(iso.getTime())) return iso;
+  }
+
   // Standard relative: "3 days ago", "2 weeks ago"
   const relativeMatch = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/);
   if (relativeMatch) {
@@ -75,7 +82,7 @@ function parseRelativeDate(text) {
     return new Date(now.getTime() - value * msMap[unit]);
   }
 
-  // Absolute date strings: "Jan 15, 2025", "15 Jan 2025", "2025-01-15"
+  // Absolute date strings: "Jan 15, 2025"
   const absoluteAttempt = new Date(text);
   if (!isNaN(absoluteAttempt.getTime())) return absoluteAttempt;
 
@@ -180,20 +187,21 @@ async function fetchRecentVideosForChannel(channel_id, content_type, maxPages = 
     if (items.length === 0) break;
 
     // Log the first item's raw data so we can see what ScrapeBadger returns
-    if (page === 0 && items.length > 0) {
-      console.log(
-        `  🔬 Sample item for ${channel_id}:`,
-        JSON.stringify({
-          type:               items[0].type,
-          video_id:           items[0].video_id,
-          title:              items[0].title?.slice(0, 50),
-          published_time_text: items[0].published_time_text,
-          view_count:         items[0].view_count,
-          view_count_text:    items[0].view_count_text,
-          is_short:           items[0].is_short,
-        })
-      );
-    }
+if (page === 0 && items.length > 0) {
+  console.log(
+    `  🔬 Sample item for ${channel_id}:`,
+    JSON.stringify({
+      type:                items[0].type,
+      video_id:            items[0].video_id,
+      title:               items[0].title?.slice(0, 50),
+      published_time_text: items[0].published_time_text,
+      published_at:        items[0].published_at,        // ← new
+      view_count:          items[0].view_count,
+      view_count_text:     items[0].view_count_text,
+      is_short:            items[0].is_short,
+    })
+  );
+}
 
     for (const item of items) {
       if (item.type !== 'video') continue;
@@ -208,18 +216,17 @@ async function fetchRecentVideosForChannel(channel_id, content_type, maxPages = 
         }
       }
 
-      allVideos.push({
-        video_id:            item.video_id,
-        title:               item.title,
-        url:                 item.url,
-        thumbnail:           item.thumbnail,
-        view_count:          parseViewCount(item.view_count || item.view_count_text),
-        view_count_text:     item.view_count_text || '',
-        published_time_text: item.published_time_text || 'Unknown',
-        duration_seconds:    item.length_seconds || 0,
-        is_short:            item.is_short || content_type === 'shorts',
-      });
-    }
+allVideos.push({
+  video_id:            item.video_id,
+  title:               item.title,
+  url:                 item.url,
+  thumbnail:           item.thumbnail,
+  view_count:          parseViewCount(item.view_count || item.view_count_text),
+  view_count_text:     item.view_count_text || '',
+  published_time_text: item.published_time_text || item.published_at || null, // ← updated
+  duration_seconds:    item.length_seconds || 0,
+  is_short:            item.is_short || content_type === 'shorts',
+});
 
     continuation = pageData.continuation;
     if (!continuation) break;
