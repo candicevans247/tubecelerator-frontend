@@ -1619,6 +1619,231 @@ bot.command('cancelquick', async (ctx) => {
   }
 });
 
+bot.command('deltrendtemplate', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 2) return ctx.reply('Usage: /deltrendtemplate <subniche_id>');
+
+  const subnicheId = parseInt(parts[1]);
+  if (isNaN(subnicheId)) return ctx.reply('❌ Invalid subniche ID.');
+
+  try {
+    const { getSubnicheById } = require('./trend-db');
+    const subniche = await getSubnicheById(subnicheId);
+    if (!subniche) return ctx.reply(`❌ Template ${subnicheId} not found.`);
+
+    ctx.reply(
+      `⚠️ *Delete Template Confirmation*\n\n` +
+      `📋 Name: *${subniche.name}*\n` +
+      `📊 Channels: ${subniche.channel_count}\n\n` +
+      `This will delete the template, all its channels, and all cached results\\. Are you sure?`,
+      {
+        parse_mode: 'MarkdownV2',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🗑 Yes, Delete',  callback_data: `admin_del_template_${subnicheId}` },
+            { text: '❌ Cancel',        callback_data: 'admin_del_template_cancel'        }
+          ]]
+        }
+      }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+bot.command('listrendtemplates', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  try {
+    const { getAllSubniches } = require('./trend-db');
+    const subniches = await getAllSubniches();
+
+    if (subniches.length === 0) return ctx.reply('No templates found.');
+
+    let msg = '📋 *All Trend Templates*\n\n';
+    subniches.forEach(s => {
+      msg +=
+        `🆔 ID: \`${s.id}\`\n` +
+        `📋 Name: *${s.name}*\n` +
+        `${s.content_type === 'shorts' ? '📱 Shorts' : '🎬 Longform'} | ` +
+        `${s.channel_count} channel(s)\n` +
+        `👤 Created by: ${s.created_by || 'system'}\n\n`;
+    });
+
+    ctx.reply(msg, { parse_mode: 'Markdown' });
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+bot.command('listrendchannels', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 2) return ctx.reply('Usage: /listrendchannels <subniche_id>');
+
+  const subnicheId = parseInt(parts[1]);
+  if (isNaN(subnicheId)) return ctx.reply('❌ Invalid subniche ID.');
+
+  try {
+    const { getSubnicheById, getChannelsForSubniche } = require('./trend-db');
+    const subniche  = await getSubnicheById(subnicheId);
+    if (!subniche) return ctx.reply(`❌ Template ${subnicheId} not found.`);
+
+    const channels = await getChannelsForSubniche(subnicheId);
+    if (channels.length === 0) return ctx.reply('No channels in this template.');
+
+    let msg = `📋 *Channels in "${subniche.name}"*\n\n`;
+    channels.forEach((ch, i) => {
+      msg +=
+        `${i + 1}\\. 🆔 \`${ch.id}\` — *${ch.channel_name || ch.channel_id}*\n` +
+        `   Handle: \`${ch.channel_id}\`\n\n`;
+    });
+
+    msg += `\nTo remove a channel: /delrendchannel <channel\\_id>`;
+
+    ctx.reply(msg, { parse_mode: 'MarkdownV2' });
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+bot.command('delrendchannel', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 2) return ctx.reply('Usage: /delrendchannel <channel_row_id>');
+
+  const channelRowId = parseInt(parts[1]);
+  if (isNaN(channelRowId)) return ctx.reply('❌ Invalid channel ID. Use the numeric ID from /listrendchannels.');
+
+  try {
+    const { deleteChannel } = require('./trend-db');
+    const deleted = await deleteChannel(channelRowId);
+
+    if (!deleted) return ctx.reply(`❌ Channel ${channelRowId} not found.`);
+
+    ctx.reply(
+      `✅ Channel removed.\n\n` +
+      `📋 Removed: *${deleted.channel_name || deleted.channel_id}*\n` +
+      `From subniche ID: ${deleted.subniche_id}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+bot.command('addrendchannel', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 3) return ctx.reply('Usage: /addrendchannel <subniche_id> <@handle_or_url>');
+
+  const subnicheId   = parseInt(parts[1]);
+  const channelInput = parts[2];
+
+  if (isNaN(subnicheId)) return ctx.reply('❌ Invalid subniche ID.');
+
+  try {
+    const { getSubnicheById, addChannel } = require('./trend-db');
+    const { resolveChannel }              = require('./trend-fetcher');
+
+    const subniche = await getSubnicheById(subnicheId);
+    if (!subniche) return ctx.reply(`❌ Template ${subnicheId} not found.`);
+
+    await ctx.reply('🔍 Resolving channel...');
+
+    const resolved = await resolveChannel(channelInput);
+
+    await addChannel({
+      subniche_id:       subnicheId,
+      channel_id:        channelInput,
+      resolved_id:       resolved.resolved_id,
+      channel_name:      resolved.channel_name,
+      channel_thumbnail: resolved.channel_thumbnail,
+      added_by:          ctx.from.id,
+    });
+
+    ctx.reply(
+      `✅ *Channel Added*\n\n` +
+      `📋 Template: *${subniche.name}*\n` +
+      `📺 Channel: *${resolved.channel_name}*\n` +
+      `🔗 Handle: \`${channelInput}\``,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+bot.command('renamerendtemplate', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  // Usage: /renamerendtemplate <subniche_id> New Name Here
+  const parts   = ctx.message.text.split(' ');
+  if (parts.length < 3) return ctx.reply('Usage: /renamerendtemplate <subniche_id> <new name>');
+
+  const subnicheId = parseInt(parts[1]);
+  const newName    = parts.slice(2).join(' ').trim();
+
+  if (isNaN(subnicheId))    return ctx.reply('❌ Invalid subniche ID.');
+  if (newName.length < 2)   return ctx.reply('❌ Name too short.');
+  if (newName.length > 60)  return ctx.reply('❌ Name too long (max 60 characters).');
+
+  try {
+    const { getSubnicheById, renameSubniche } = require('./trend-db');
+
+    const subniche = await getSubnicheById(subnicheId);
+    if (!subniche) return ctx.reply(`❌ Template ${subnicheId} not found.`);
+
+    await renameSubniche(subnicheId, newName);
+
+    ctx.reply(
+      `✅ *Template Renamed*\n\n` +
+      `Old: *${subniche.name}*\n` +
+      `New: *${newName}*`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+bot.command('changetrendtype', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 3) return ctx.reply('Usage: /changetrendtype <subniche_id> <videos|shorts>');
+
+  const subnicheId   = parseInt(parts[1]);
+  const newType      = parts[2].toLowerCase();
+
+  if (isNaN(subnicheId))                         return ctx.reply('❌ Invalid subniche ID.');
+  if (!['videos', 'shorts'].includes(newType))   return ctx.reply('❌ Type must be "videos" or "shorts".');
+
+  try {
+    const { getSubnicheById, updateSubnicheType } = require('./trend-db');
+
+    const subniche = await getSubnicheById(subnicheId);
+    if (!subniche) return ctx.reply(`❌ Template ${subnicheId} not found.`);
+
+    await updateSubnicheType(subnicheId, newType);
+
+    ctx.reply(
+      `✅ *Template Type Updated*\n\n` +
+      `📋 Template: *${subniche.name}*\n` +
+      `Old type: ${subniche.content_type}\n` +
+      `New type: ${newType === 'shorts' ? '📱 Shorts' : '🎬 Longform Videos'}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
 // ============================================
 // 💬 USER COMMANDS
 // ============================================
