@@ -1633,17 +1633,20 @@ bot.command('deltrendtemplate', async (ctx) => {
     const subniche = await getSubnicheById(subnicheId);
     if (!subniche) return ctx.reply(`❌ Template ${subnicheId} not found.`);
 
+    // Escape the template name for MarkdownV2
+    const escapedName = subniche.name.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
+
     ctx.reply(
       `⚠️ *Delete Template Confirmation*\n\n` +
-      `📋 Name: *${subniche.name}*\n` +
+      `📋 Name: *${escapedName}*\n` +
       `📊 Channels: ${subniche.channel_count}\n\n` +
       `This will delete the template, all its channels, and all cached results\\. Are you sure?`,
       {
         parse_mode: 'MarkdownV2',
         reply_markup: {
           inline_keyboard: [[
-            { text: '🗑 Yes, Delete',  callback_data: `admin_del_template_${subnicheId}` },
-            { text: '❌ Cancel',        callback_data: 'admin_del_template_cancel'        }
+            { text: '🗑 Yes, Delete', callback_data: `admin_del_template_${subnicheId}` },
+            { text: '❌ Cancel',      callback_data: 'admin_del_template_cancel'        }
           ]]
         }
       }
