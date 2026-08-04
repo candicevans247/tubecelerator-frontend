@@ -55,24 +55,31 @@ function parseRelativeDate(text) {
 
   if (t === 'just now' || t === 'moments ago') return new Date();
 
-  const match = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/);
-  if (!match) return null;
+  // Standard relative: "3 days ago", "2 weeks ago"
+  const relativeMatch = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/);
+  if (relativeMatch) {
+    const value = parseInt(relativeMatch[1]);
+    const unit  = relativeMatch[2];
+    const now   = new Date();
 
-  const value = parseInt(match[1]);
-  const unit  = match[2];
-  const now   = new Date();
+    const msMap = {
+      second: 1000,
+      minute: 60 * 1000,
+      hour:   60 * 60 * 1000,
+      day:    24 * 60 * 60 * 1000,
+      week:   7 * 24 * 60 * 60 * 1000,
+      month:  30 * 24 * 60 * 60 * 1000,
+      year:   365 * 24 * 60 * 60 * 1000,
+    };
 
-  const msMap = {
-    second: 1000,
-    minute: 60 * 1000,
-    hour:   60 * 60 * 1000,
-    day:    24 * 60 * 60 * 1000,
-    week:   7 * 24 * 60 * 60 * 1000,
-    month:  30 * 24 * 60 * 60 * 1000,
-    year:   365 * 24 * 60 * 60 * 1000,
-  };
+    return new Date(now.getTime() - value * msMap[unit]);
+  }
 
-  return new Date(now.getTime() - value * msMap[unit]);
+  // Absolute date strings: "Jan 15, 2025", "15 Jan 2025", "2025-01-15"
+  const absoluteAttempt = new Date(text);
+  if (!isNaN(absoluteAttempt.getTime())) return absoluteAttempt;
+
+  return null;
 }
 
 function isWithinRecencyWindow(publishedTimeText, days = RECENCY_DAYS) {
@@ -172,14 +179,33 @@ async function fetchRecentVideosForChannel(channel_id, content_type, maxPages = 
     const items = pageData.items || [];
     if (items.length === 0) break;
 
+    // Log the first item's raw data so we can see what ScrapeBadger returns
+    if (page === 0 && items.length > 0) {
+      console.log(
+        `  🔬 Sample item for ${channel_id}:`,
+        JSON.stringify({
+          type:               items[0].type,
+          video_id:           items[0].video_id,
+          title:              items[0].title?.slice(0, 50),
+          published_time_text: items[0].published_time_text,
+          view_count:         items[0].view_count,
+          view_count_text:    items[0].view_count_text,
+          is_short:           items[0].is_short,
+        })
+      );
+    }
+
     for (const item of items) {
       if (item.type !== 'video') continue;
 
-      if (!isWithinRecencyWindow(item.published_time_text)) {
-        // This video is older than 30 days — everything after
-        // this (sorted newest first) will also be older, so stop.
-        hitOldContent = true;
-        break;
+      // If published_time_text is missing, include the video anyway
+      // rather than excluding everything — we'd rather have false
+      // positives than miss all content
+      if (item.published_time_text) {
+        if (!isWithinRecencyWindow(item.published_time_text)) {
+          hitOldContent = true;
+          break;
+        }
       }
 
       allVideos.push({
@@ -189,7 +215,7 @@ async function fetchRecentVideosForChannel(channel_id, content_type, maxPages = 
         thumbnail:           item.thumbnail,
         view_count:          parseViewCount(item.view_count || item.view_count_text),
         view_count_text:     item.view_count_text || '',
-        published_time_text: item.published_time_text || '',
+        published_time_text: item.published_time_text || 'Unknown',
         duration_seconds:    item.length_seconds || 0,
         is_short:            item.is_short || content_type === 'shorts',
       });
@@ -199,7 +225,6 @@ async function fetchRecentVideosForChannel(channel_id, content_type, maxPages = 
     if (!continuation) break;
     page++;
 
-    // Small delay between pages to be a good API citizen
     if (page < maxPages && !hitOldContent) {
       await new Promise(r => setTimeout(r, 500));
     }
