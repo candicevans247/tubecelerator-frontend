@@ -2021,6 +2021,34 @@ bot.on('callback_query', async (ctx) => {
   console.log('Callback:', callbackData, '| User:', ctx.from.id);
 
   try {
+    // ── Admin delete template confirmation ────────────────────────────
+if (callbackData.startsWith('admin_del_template_')) {
+  if (!isAdmin(ctx)) return ctx.answerCbQuery('❌ Admin only', true);
+
+  const subnicheId = parseInt(callbackData.replace('admin_del_template_', ''));
+  try {
+    const { deleteSubniche } = require('./trend-db');
+    const deleted = await deleteSubniche(subnicheId);
+
+    await ctx.editMessageText(
+      `🗑 *Template Deleted*\n\n` +
+      `📋 *${deleted.name}* and all its channels and cached results have been removed.`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.answerCbQuery('✅ Deleted');
+  } catch (err) {
+    await ctx.answerCbQuery('❌ Delete failed', true);
+    await ctx.editMessageText(`❌ Failed to delete: ${err.message}`);
+  }
+  return;
+}
+
+// ── Admin delete template cancel ──────────────────────────────────
+if (callbackData === 'admin_del_template_cancel') {
+  await ctx.editMessageText('❌ Deletion cancelled.');
+  await ctx.answerCbQuery('Cancelled');
+  return;
+}
     // ── Audio generation confirm ──────────────────────────────────────
 if (callbackData === 'confirm_audio_generate') {
   await ctx.answerCbQuery('Processing...');
