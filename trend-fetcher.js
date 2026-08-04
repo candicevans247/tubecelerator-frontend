@@ -227,6 +227,7 @@ allVideos.push({
   duration_seconds:    item.length_seconds || 0,
   is_short:            item.is_short || content_type === 'shorts',
 });
+    }
 
     continuation = pageData.continuation;
     if (!continuation) break;
