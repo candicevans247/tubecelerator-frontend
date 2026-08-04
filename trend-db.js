@@ -135,6 +135,42 @@ async function getPublicSubniches() {
   return rows;
 }
 
+async function deleteSubniche(id) {
+  // CASCADE on the foreign keys handles channels and cache automatically
+  const { rows } = await pool.query(
+    `DELETE FROM trend_subniches WHERE id = $1 RETURNING *`,
+    [id]
+  );
+  if (rows.length === 0) throw new Error(`Template ${id} not found`);
+  return rows[0];
+}
+
+async function deleteChannel(channel_row_id) {
+  const { rows } = await pool.query(
+    `DELETE FROM trend_channels WHERE id = $1 RETURNING *`,
+    [channel_row_id]
+  );
+  if (rows.length === 0) return null;
+
+  // Update the channel count on the parent subniche
+  await updateSubnicheChannelCount(rows[0].subniche_id);
+  return rows[0];
+}
+
+async function renameSubniche(id, newName) {
+  await pool.query(
+    `UPDATE trend_subniches SET name = $1, updated_at = NOW() WHERE id = $2`,
+    [newName, id]
+  );
+}
+
+async function updateSubnicheType(id, content_type) {
+  await pool.query(
+    `UPDATE trend_subniches SET content_type = $1, updated_at = NOW() WHERE id = $2`,
+    [content_type, id]
+  );
+}
+
 async function getUserSubniches(telegram_id) {
   const { rows } = await pool.query(
     `SELECT s.*, COUNT(c.id)::int AS channel_count
@@ -313,8 +349,12 @@ module.exports = {
   initTrendTables,
   createSubniche,
   getSubnicheById,
-  getAllSubniches,          // ← replaces the three above
+  getAllSubniches,         
   updateSubnicheChannelCount,
+  deleteSubniche,       
+  deleteChannel,      
+  renameSubniche, 
+  updateSubnicheType, 
   addChannel,
   getChannelsForSubniche,
   isCachedToday,
