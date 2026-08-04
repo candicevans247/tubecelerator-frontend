@@ -1004,17 +1004,17 @@ if (item.thumbnail) {
       delete userData.trendFlow;
       userStates.set(chatId, userData);
 
-      const channelList = trendFlow.resolvedChannels
-        .map(ch => `• ${ch.channel_name}`)
-        .join('\n');
+const channelList = trendFlow.resolvedChannels
+  .map(ch => `• ${ch.channel_name.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&')}`)
+  .join('\n');
 
-      const summaryText =
-        `🎉 *Template Created!*\n\n` +
-        `📋 *Name:* ${trendFlow.name}\n` +
-        `*Type:* ${trendFlow.content_type === 'shorts' ? '📱 Shorts' : '🎬 Longform'}\n` +
-        `🌍 Public — visible to all users\n\n` +
-        `*Channels tracked \\(${trendFlow.resolvedChannels.length}\\):*\n${channelList}\n\n` +
-        `Tap below to see what's trending now:`;
+const summaryText =
+  `🎉 *Template Created\\!*\n\n` +
+  `📋 *Name:* ${trendFlow.name.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&')}\n` +
+  `*Type:* ${trendFlow.content_type === 'shorts' ? '📱 Shorts' : '🎬 Longform'}\n` +
+  `🌍 Public — visible to all users\n\n` +
+  `*Channels tracked \\(${trendFlow.resolvedChannels.length}\\):*\n${channelList}\n\n` +
+  `Tap below to see what's trending now:`;
 
       const keyboard = {
         inline_keyboard: [
