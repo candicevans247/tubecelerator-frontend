@@ -324,6 +324,15 @@ function isSupportMessage(message) {
 const WORKER_BASE_URL  = process.env.WORKER_BASE_URL  || 'https://your-worker.railway.app';
 const BACKEND_BASE_URL = process.env.BACKEND_BASE_URL || 'https://your-backend.railway.app';
 
+// ─── Template map ─────────────────────────────────────────────────────────────
+// Maps Telegram button labels to template registry keys.
+// To add a new template: add one entry here + registry.js + backend validContentFlows
+const TEMPLATE_MAP = {
+  '👑 Celebrity News':                'celebrity-news',
+  '🔟 Top 10 Videos':                 'top-10',
+  '💔 Celeb Relationship Breakdowns': 'celeb-relationship-breakdown',
+};
+
 const ADMIN_IDS = [541812135, 7948746526, 5426162126];
 
 const APPROVAL_REQUIRED_USER = 6646033752;
@@ -1172,10 +1181,11 @@ bot.hears('🎬 Create Video', async (ctx) => {
   userStates.set(ctx.chat.id, userData);
 
   return ctx.reply(
-    '🎬 Choose your content flow.',
+    '🎬 Choose a template:',
     Markup.keyboard([
-      ['📰 Essay Styled Videos'],
-      ['📋 Listicle Videos'],
+      ['👑 Celebrity News'],
+      ['🔟 Top 10 Videos'],
+      ['💔 Celeb Relationship Breakdowns'],
     ]).oneTime().resize()
   );
 });
@@ -1205,16 +1215,23 @@ bot.hears('📈 Trending Topics', async (ctx) => {
   await showTrendingHome(ctx);
 });
   
-bot.hears(['📰 Essay Styled Videos', '📋 Listicle Videos'], async (ctx) => {
-  const userData    = userStates.get(ctx.chat.id) || {};
-  const contentFlow = ctx.message.text === '📰 Essay Styled Videos' ? 'news' : 'listicle';
+bot.hears(Object.keys(TEMPLATE_MAP), async (ctx) => {
+  const userData   = userStates.get(ctx.chat.id) || {};
+  const template   = TEMPLATE_MAP[ctx.message.text];
+  const label      = ctx.message.text;
 
-  userData.content_flow = contentFlow;
+  userData.content_flow = template;
   userStates.set(ctx.chat.id, userData);
 
-  ctx.reply(
-    `✅ ${contentFlow === 'listicle' ? 'Listicle' : 'Essay Styled'} Videos selected!\n\nHow would you like to begin?`,
-    Markup.keyboard([['📝 Script'], ['💡 Prompt']]).oneTime().resize()
+  return ctx.reply(
+    `✅ *${label}* selected!\n\nHow would you like to begin?`,
+    {
+      parse_mode: 'Markdown',
+      ...Markup.keyboard([
+        ['📝 Script'],
+        ['💡 Prompt'],
+      ]).oneTime().resize()
+    }
   );
 });
 
@@ -3360,19 +3377,23 @@ if (!userData.voice && ALL_VOICES.includes(message) && userData.topLevelFlow !==
   }
 
   // ── Fallbacks ─────────────────────────────────────────────────────
-  if (!userData.content_flow && !message.startsWith('/') && !isInSupportMode && Object.keys(userData).length > 0) {
-    return ctx.reply(
-      '⚠️ Please choose a video type to get started:',
-      Markup.keyboard([['📰 Essay Styled Videos'], ['📋 Listicle Videos']]).oneTime().resize()
-    );
-  }
+if (!userData.content_flow && !message.startsWith('/') && !isInSupportMode && Object.keys(userData).length > 0) {
+  return ctx.reply(
+    '⚠️ Please choose a template to get started:',
+    Markup.keyboard([
+      ['👑 Celebrity News'],
+      ['🔟 Top 10 Videos'],
+      ['💔 Celeb Relationship Breakdowns'],
+    ]).oneTime().resize()
+  );
+}
 
-  if (userData.content_flow && !userData.mode && !message.startsWith('/') && !isInSupportMode) {
-    return ctx.reply(
-      '⚠️ Please choose how to begin:',
-      Markup.keyboard([['📝 Script'], ['💡 Prompt']]).oneTime().resize()
-    );
-  }
+if (userData.content_flow && !userData.mode && !message.startsWith('/') && !isInSupportMode) {
+  return ctx.reply(
+    '⚠️ Please choose how to begin:',
+    Markup.keyboard([['📝 Script'], ['💡 Prompt']]).oneTime().resize()
+  );
+}
 });
 
 // ============================================
