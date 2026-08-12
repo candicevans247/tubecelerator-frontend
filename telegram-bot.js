@@ -1707,6 +1707,16 @@ bot.command('listrendchannels', async (ctx) => {
   const subnicheId = parseInt(parts[1]);
   if (isNaN(subnicheId)) return ctx.reply('❌ Invalid subniche ID.');
 
+  // ── MarkdownV2 escape helper ──────────────────────────────────────
+  // Escapes ALL reserved MarkdownV2 characters
+  function escapeV2(text) {
+    if (!text) return '';
+    return String(text).replace(
+      /[_*[\]()~`>#+\-=|{}.!\\]/g,
+      '\\$&'
+    );
+  }
+
   try {
     const { getSubnicheById, getChannelsForSubniche } = require('./trend-db');
     const subniche  = await getSubnicheById(subnicheId);
@@ -1715,11 +1725,19 @@ bot.command('listrendchannels', async (ctx) => {
     const channels = await getChannelsForSubniche(subnicheId);
     if (channels.length === 0) return ctx.reply('No channels in this template.');
 
-    let msg = `📋 *Channels in "${subniche.name}"*\n\n`;
+    // Escape the subniche name — this is what was crashing
+    const escapedSubnicheName = escapeV2(subniche.name);
+
+    let msg = `📋 *Channels in "${escapedSubnicheName}"*\n\n`;
+
     channels.forEach((ch, i) => {
+      const channelDisplay = escapeV2(ch.channel_name || ch.channel_id);
+      const channelHandle  = escapeV2(ch.channel_id);
+      const channelRowId   = escapeV2(String(ch.id));
+
       msg +=
-        `${i + 1}\\. 🆔 \`${ch.id}\` — *${ch.channel_name || ch.channel_id}*\n` +
-        `   Handle: \`${ch.channel_id}\`\n\n`;
+        `${i + 1}\\. 🆔 \`${channelRowId}\` — *${channelDisplay}*\n` +
+        `   Handle: \`${channelHandle}\`\n\n`;
     });
 
     msg += `\nTo remove a channel: /delrendchannel <channel\\_id>`;
