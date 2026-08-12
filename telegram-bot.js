@@ -291,6 +291,44 @@ bot.action('noop', async (ctx) => {
 // 🛠️ HELPERS
 // ============================================
 
+function buildReconciliationMessage(reconciliation) {
+  if (!reconciliation) return '';
+
+  const {
+    action, applied, partial,
+    estimatedMinutes, actualMinutes,
+    estimatedCredits, actualCredits,
+    amountApplied
+  } = reconciliation;
+
+  // No adjustment or failed — don't show anything confusing to user
+  if (!action || action === 'none') return '';
+  if (!applied) return '';
+
+  if (action === 'refund') {
+    return (
+      `\n\n💰 *Credit Adjustment*\n` +
+      `Estimated: ${estimatedMinutes} min → ${estimatedCredits} credits\n` +
+      `Actual: ${actualMinutes} min → ${actualCredits} credits\n` +
+      `♻️ *Refunded: ${amountApplied} credit(s)*`
+    );
+  }
+
+  if (action === 'surcharge') {
+    const label = partial
+      ? `${amountApplied} _(partial — low balance)_`
+      : `${amountApplied}`;
+    return (
+      `\n\n💰 *Credit Adjustment*\n` +
+      `Estimated: ${estimatedMinutes} min → ${estimatedCredits} credits\n` +
+      `Actual: ${actualMinutes} min → ${actualCredits} credits\n` +
+      `💳 *Extra charged: ${label} credit(s)*`
+    );
+  }
+
+  return '';
+}
+
 function extractUserIdFromSupportMessage(message) {
   if (!message) return null;
 
@@ -987,7 +1025,9 @@ async function notifyAudioForReview({ id, user_id, result_audio }) {
   }
 }
 
-async function notifyVideoComplete({ id, user_id, result_video }) {
+async function notifyVideoComplete({ id, user_id, result_video, reconciliation = null }) {
+
+  const reconciliationMsg = buildReconciliationMessage(reconciliation);
 
   // Check size first without downloading
   let fileSizeBytes = 0;
@@ -1002,7 +1042,7 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
   const DOWNLOAD_SIZE_LIMIT = 2000 * 1024 * 1024; // 2GB
 
   if (fileSizeBytes > DOWNLOAD_SIZE_LIMIT) {
-    await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
+    await sendVideoAsLink(user_id, result_video, id, fileSizeBytes, reconciliation);
     return;
   }
 
@@ -1018,7 +1058,7 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
     videoBuffer = Buffer.from(response.data);
   } catch (downloadErr) {
     console.error(`❌ Download failed: ${downloadErr.message}`);
-    await sendVideoAsLink(user_id, result_video, id, fileSizeBytes);
+    await sendVideoAsLink(user_id, result_video, id, fileSizeBytes, reconciliation);
     return;
   }
 
@@ -1040,7 +1080,7 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption: `🎬 *Your video is ready!* 🎉`,
+        caption: `🎬 *Your video is ready!* 🎉${reconciliationMsg}`,
         parse_mode: 'Markdown',
         supports_streaming: true
       }
@@ -1057,7 +1097,7 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
       user_id,
       { source: videoBuffer, filename: `video_${id}.mp4` },
       {
-        caption: `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document.`,
+       caption: `🎬 *Your video is ready!* 🎉\n\n📁 Sent as document.${reconciliationMsg}`,
         parse_mode: 'Markdown'
       }
     );
@@ -1065,25 +1105,31 @@ async function notifyVideoComplete({ id, user_id, result_video }) {
     return;
   } catch (docErr) {
     console.warn(`⚠️ sendDocument failed: ${docErr.message} — sending link`);
-    await sendVideoAsLink(user_id, result_video, id, videoBuffer.length);
+    await sendVideoAsLink(user_id, result_video, id, videoBuffer.length, reconciliation);
   }
 }
 // ─── Helper: Send video as plain text link (no Markdown on the URL) ──────────
-async function sendVideoAsLink(user_id, result_video, id, fileSizeBytes) {
-  const sizeMB = fileSizeBytes ? ` (${(fileSizeBytes / 1024 / 1024).toFixed(0)}MB)` : '';
-  
+async function sendVideoAsLink(user_id, result_video, id, fileSizeBytes, reconciliation = null) {
+  const sizeMB = fileSizeBytes
+    ? ` (${(fileSizeBytes / 1024 / 1024).toFixed(0)}MB)`
+    : '';
+
+  // Convert Markdown reconciliation to HTML — this function uses HTML mode
+  const reconciliationHtml = buildReconciliationMessage(reconciliation)
+    .replace(/\*([^*]+)\*/g, '<b>$1</b>')
+    .replace(/_([^_]+)_/g,   '<i>$1</i>');
+
   try {
-    // ⚠️  Use HTML parse_mode so the URL stays untouched
-    // Markdown chokes on underscores and dots in R2/S3 URLs
     await bot.telegram.sendMessage(
       user_id,
       `🎬 <b>Your video is ready!</b> 🎉\n\n` +
       `⚠️ File${sizeMB} is too large to send directly.\n\n` +
       `📥 <b>Download your video:</b>\n` +
       `${result_video}\n\n` +
-      `<i>Link valid for 7 days</i>`,
-      { 
-        parse_mode: 'HTML',   // ← HTML, not Markdown — URLs are safe
+      `<i>Link valid for 7 days</i>` +
+      reconciliationHtml,
+      {
+        parse_mode:               'HTML',
         disable_web_page_preview: true
       }
     );
