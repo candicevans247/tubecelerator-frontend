@@ -1882,6 +1882,274 @@ bot.command('changetrendtype', async (ctx) => {
 });
 
 // ============================================
+// 🔍 SEGMENT INFO COMMAND
+// ============================================
+
+bot.command('segmentinfo', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 2) {
+    return ctx.reply(
+      '📋 *Segment Info*\n\n' +
+      'Usage:\n' +
+      '• `/segmentinfo <jobId>` — show all segments\n' +
+      '• `/segmentinfo <jobId> <segmentIndex>` — show one segment',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const jobId        = parseInt(parts[1]);
+  const segmentIndex = parts[2] !== undefined ? parseInt(parts[2]) : null;
+
+  if (isNaN(jobId)) return ctx.reply('❌ Invalid job ID.');
+  if (segmentIndex !== null && isNaN(segmentIndex)) {
+    return ctx.reply('❌ Invalid segment index.');
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT id, user_id, status, segments, media_type, media_mode FROM jobs WHERE id = $1',
+      [jobId]
+    );
+
+    if (result.rows.length === 0) {
+      return ctx.reply(`❌ Job ${jobId} not found.`);
+    }
+
+    const job      = result.rows[0];
+    const segments = job.segments || [];
+
+    if (segments.length === 0) {
+      return ctx.reply(`⚠️ Job ${jobId} has no segments yet.`);
+    }
+
+    // ── Single segment ───────────────────────────────────────────────
+    if (segmentIndex !== null) {
+      if (segmentIndex < 0 || segmentIndex >= segments.length) {
+        return ctx.reply(
+          `❌ Segment ${segmentIndex} not found.\n` +
+          `Job ${jobId} has ${segments.length} segment(s) (0 to ${segments.length - 1}).`
+        );
+      }
+
+      const seg = segments[segmentIndex];
+
+      const hasImage    = !!seg.imageUrl;
+      const hasVideo    = !!seg.videoUrl;
+      const hasAudio    = !!seg.audioUrl;
+      const isApproved  = !!seg.approved;
+      const isVApproved = !!seg.videoApproved;
+
+      const msg =
+        `🔍 *Job ${jobId} — Segment ${segmentIndex + 1}/${segments.length}*\n\n` +
+        `📝 *Text:*\n${(seg.text || 'N/A').substring(0, 300)}` +
+        `${(seg.text || '').length > 300 ? '...' : ''}\n\n` +
+        `🔎 *Query:* \`${seg.query || seg.imageQuery || 'N/A'}\`\n\n` +
+        `⏱ *Duration:* ${seg.duration || 0}s\n\n` +
+        `📊 *Media Status:*\n` +
+        `  🖼️ Image: ${hasImage  ? '✅ ' + seg.imageUrl.substring(0, 60) + '...' : '❌ None'}\n` +
+        `  🎬 Video: ${hasVideo  ? '✅ ' + seg.videoUrl.substring(0, 60) + '...' : '❌ None'}\n` +
+        `  🎵 Audio: ${hasAudio  ? '✅ ' + seg.audioUrl.substring(0, 60) + '...' : '❌ None'}\n\n` +
+        `✅ *Approvals:*\n` +
+        `  Image approved: ${isApproved  ? '✅ Yes' : '❌ No'}\n` +
+        `  Video approved: ${isVApproved ? '✅ Yes' : '❌ No'}\n\n` +
+        `🔗 *Source:* ${seg.source || 'auto'}\n` +
+        `📦 *Raw keys:* \`${Object.keys(seg).join(', ')}\``;
+
+      return ctx.reply(msg, {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      });
+    }
+
+    // ── All segments overview ────────────────────────────────────────
+    let msg =
+      `📋 *Job ${jobId} — All Segments*\n` +
+      `Status: \`${job.status}\` | Media: ${job.media_type} (${job.media_mode})\n` +
+      `Total: ${segments.length} segment(s)\n\n`;
+
+    segments.forEach((seg, i) => {
+      const hasImage    = !!seg.imageUrl;
+      const hasVideo    = !!seg.videoUrl;
+      const hasAudio    = !!seg.audioUrl;
+      const imgApproved = !!seg.approved;
+      const vidApproved = !!seg.videoApproved;
+
+      const imageStatus = hasImage
+        ? (imgApproved ? '✅' : '⏳')
+        : '❌';
+      const videoStatus = hasVideo
+        ? (vidApproved ? '✅' : '⏳')
+        : '❌';
+      const audioStatus = hasAudio ? '✅' : '❌';
+
+      const preview = (seg.text || '').substring(0, 60);
+
+      msg +=
+        `*Seg ${i + 1}:* ${imageStatus}img ${videoStatus}vid ${audioStatus}aud\n` +
+        `_${preview}${(seg.text || '').length > 60 ? '...' : ''}_\n` +
+        `Query: \`${(seg.query || seg.imageQuery || 'N/A').substring(0, 40)}\`\n\n`;
+    });
+
+    // Split into chunks if too long for one message
+    if (msg.length > 4000) {
+      const chunks = [];
+      let current  = '';
+      const lines  = msg.split('\n');
+
+      for (const line of lines) {
+        if ((current + line + '\n').length > 4000) {
+          chunks.push(current);
+          current = '';
+        }
+        current += line + '\n';
+      }
+      if (current) chunks.push(current);
+
+      for (const chunk of chunks) {
+        await ctx.reply(chunk, {
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true
+        });
+      }
+    } else {
+      ctx.reply(msg, {
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      });
+    }
+
+  } catch (err) {
+    console.error('segmentinfo error:', err);
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+// ============================================
+// 🔄 RESET SEGMENT COMMAND
+// ============================================
+
+bot.command('resetsegment', async (ctx) => {
+  if (!isAdmin(ctx)) return ctx.reply('❌ Admin only.');
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length < 3) {
+    return ctx.reply(
+      '🔄 *Reset Segment*\n\n' +
+      'Resets segment(s) back to before media was fetched.\n\n' +
+      'Usage:\n' +
+      '• `/resetsegment <jobId> <segmentIndex>` — reset one segment\n' +
+      '• `/resetsegment <jobId> all` — reset all segments',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const jobId       = parseInt(parts[1]);
+  const targetInput = parts[2].toLowerCase();
+
+  if (isNaN(jobId)) return ctx.reply('❌ Invalid job ID.');
+
+  const resetAll     = targetInput === 'all';
+  const segmentIndex = resetAll ? null : parseInt(targetInput);
+
+  if (!resetAll && isNaN(segmentIndex)) {
+    return ctx.reply('❌ Invalid segment index. Use a number or "all".');
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT id, status, segments FROM jobs WHERE id = $1',
+      [jobId]
+    );
+
+    if (result.rows.length === 0) {
+      return ctx.reply(`❌ Job ${jobId} not found.`);
+    }
+
+    const job      = result.rows[0];
+    const segments = job.segments || [];
+
+    if (segments.length === 0) {
+      return ctx.reply(`⚠️ Job ${jobId} has no segments to reset.`);
+    }
+
+    if (!resetAll && (segmentIndex < 0 || segmentIndex >= segments.length)) {
+      return ctx.reply(
+        `❌ Segment ${segmentIndex} not found.\n` +
+        `Job ${jobId} has ${segments.length} segment(s) (0 to ${segments.length - 1}).`
+      );
+    }
+
+    // ── Reset function — strips all media data from a segment ────────
+    // Keeps: text, query, imageQuery, duration (placeholder)
+    // Removes: imageUrl, videoUrl, audioUrl, approved,
+    //          videoApproved, source, thumbnailUrl
+    function resetSegmentMedia(seg) {
+      return {
+        text:       seg.text       || '',
+        query:      seg.query      || seg.imageQuery || '',
+        imageQuery: seg.imageQuery || seg.query      || '',
+        duration:   0,
+        // intentionally omitting all media fields
+      };
+    }
+
+    let updatedSegments;
+    let resetCount = 0;
+
+    if (resetAll) {
+      updatedSegments = segments.map(seg => {
+        resetCount++;
+        return resetSegmentMedia(seg);
+      });
+    } else {
+      updatedSegments = segments.map((seg, i) => {
+        if (i === segmentIndex) {
+          resetCount++;
+          return resetSegmentMedia(seg);
+        }
+        return seg;
+      });
+    }
+
+    // ── Determine what status to roll back to ────────────────────────
+    // Rolling back to segments_ready means worker will re-fetch media
+    const rollbackStatus = 'segments_ready';
+
+    await pool.query(
+      `UPDATE jobs
+       SET segments      = $1,
+           status        = $2,
+           error_message = NULL,
+           updated_at    = NOW()
+       WHERE id = $3`,
+      [JSON.stringify(updatedSegments), rollbackStatus, jobId]
+    );
+
+    // Wake worker to re-process
+    await wakeWorker(jobId, 'segment_reset');
+
+    const target = resetAll
+      ? `all ${resetCount} segment(s)`
+      : `segment ${segmentIndex + 1}`;
+
+    ctx.reply(
+      `✅ *Segment Reset Complete*\n\n` +
+      `🎬 Job: \`${jobId}\`\n` +
+      `🔄 Reset: ${target}\n` +
+      `📊 New status: \`${rollbackStatus}\`\n\n` +
+      `Worker has been notified to re-fetch media.`,
+      { parse_mode: 'Markdown' }
+    );
+
+  } catch (err) {
+    console.error('resetsegment error:', err);
+    ctx.reply(`❌ Error: ${err.message}`);
+  }
+});
+
+// ============================================
 // 💬 USER COMMANDS
 // ============================================
 
