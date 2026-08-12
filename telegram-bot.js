@@ -543,66 +543,56 @@ async function submitVideoJob(ctx, userData) {
       }
 
       // Approval-required user
-      if (ctx.chat.id === APPROVAL_REQUIRED_USER) {
-        const { mode, inputText, videotype, voice, content_flow, mediaMode, duration } = userData;
-        for (const adminId of ADMIN_IDS) {
-          await bot.telegram.sendMessage(
-            adminId,
-            `🔔 *VIDEO APPROVAL REQUIRED*\n\n` +
-            `👤 User: @${ctx.from.username || 'N/A'}\n` +
-            `🆔 User ID: [${ctx.from.id}](tg://user?id=${ctx.from.id})\n` +
-            `🎬 Job ID: ${jobId}\n\n` +
-            `📋 Details:\n` +
-            `• Flow: *${content_flow || 'news'}*\n` +
-            `• Type: *${mode}*\n` +
-            `• Duration: *${duration} min*\n` +
-            `• Style: *${videotype}*\n` +
-            `• Voice: *${voice}*\n` +
-            `• Media: *${userData.mediaType || 'images'}*\n` +
-            `• Media Mode: *${mediaMode === 'manual' ? '📤 User Upload' : '🔍 Auto-Fetch'}*\n\n` +
-            `✍️ Content:\n${inputText.substring(0, 300)}${inputText.length > 300 ? '...' : ''}`,
-            {
-              parse_mode: 'Markdown',
-              reply_markup: {
-                inline_keyboard: [[
-                  { text: '✅ Approve & Start Processing', callback_data: `approve_job_${jobId}` }
-                ]]
-              }
-            }
-          );
+     if (ctx.chat.id === APPROVAL_REQUIRED_USER) {
+  const { mode, inputText, videotype, voice, content_flow, mediaMode, duration } = userData;
+  for (const adminId of ADMIN_IDS) {
+    await bot.telegram.sendMessage(
+      adminId,
+      `🔔 *VIDEO APPROVAL REQUIRED*\n\n` +
+      `🎬 *Job ID:* \`${jobId}\`\n\n` +         // ← add this line
+      `👤 User: @${ctx.from.username || 'N/A'}\n` +
+      `🆔 User ID: [${ctx.from.id}](tg://user?id=${ctx.from.id})\n\n` +
+      `📋 Details:\n` +
+      `• Flow: *${content_flow || 'news'}*\n` +
+      `• Type: *${mode}*\n` +
+      `• Duration: *${duration} min*\n` +
+      `• Style: *${videotype}*\n` +
+      `• Voice: *${voice}*\n` +
+      `• Media: *${userData.mediaType || 'images'}*\n` +
+      `• Media Mode: *${mediaMode === 'manual' ? '📤 User Upload' : '🔍 Auto-Fetch'}*\n\n` +
+      `✍️ Content:\n${inputText.substring(0, 300)}${inputText.length > 300 ? '...' : ''}`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '✅ Approve & Start Processing', callback_data: `approve_job_${jobId}` }
+          ]]
         }
-        return true;
       }
+    );
+  }
+  return true;
+}
 
       // Normal admin notification
       const { mode, inputText, videotype, voice, content_flow, mediaMode } = userData;
-      for (const adminId of ADMIN_IDS) {
-        await bot.telegram.sendMessage(
-          adminId,
-          `📨 *New Submission Received!*\n` +
-          `👤 Username: @${escapeMarkdown(ctx.from.username)}\n` +
-          `🆔 User ID: [${ctx.from.id}](tg://user?id=${ctx.from.id})\n\n` +
-          `🎬 Flow: *${content_flow || 'news'}*\n` +
-          `🧾 Type: *${mode}*\n` +
-          `🕒 Duration: *${userData.duration} min*\n` +
-          `🎬 Style: *${videotype}*\n` +
-          `🎤 Voice: *${voice}*\n` +
-          `📱 Media: *${userData.mediaType || 'images'}*\n` +
-          `🤖 Media Mode: *${mediaMode === 'manual' ? '📤 Manual' : '🔍 Auto'}*\n\n` +
-          `✍️ Input:\n${escapeMarkdown(inputText.substring(0, 500))}${inputText.length > 500 ? '...' : ''}`,
-          { parse_mode: 'Markdown' }
-        );
-      }
-
-      return true;
-    } else {
-      throw new Error(response.data.message || 'Failed to submit job');
-    }
-  } catch (error) {
-    console.error('Error submitting job:', error);
-    await ctx.reply('❌ Failed to submit job. Please try again.');
-    return false;
-  }
+for (const adminId of ADMIN_IDS) {
+  await bot.telegram.sendMessage(
+    adminId,
+    `📨 *New Submission Received!*\n` +
+    `🎬 *Job ID:* \`${jobId}\`\n\n` +           // ← add this line
+    `👤 Username: @${escapeMarkdown(ctx.from.username)}\n` +
+    `🆔 User ID: [${ctx.from.id}](tg://user?id=${ctx.from.id})\n\n` +
+    `🎬 Flow: *${content_flow || 'news'}*\n` +
+    `🧾 Type: *${mode}*\n` +
+    `🕒 Duration: *${userData.duration} min*\n` +
+    `🎬 Style: *${videotype}*\n` +
+    `🎤 Voice: *${voice}*\n` +
+    `📱 Media: *${userData.mediaType || 'images'}*\n` +
+    `🤖 Media Mode: *${mediaMode === 'manual' ? '📤 Manual' : '🔍 Auto'}*\n\n` +
+    `✍️ Input:\n${escapeMarkdown(inputText.substring(0, 500))}${inputText.length > 500 ? '...' : ''}`,
+    { parse_mode: 'Markdown' }
+  );
 }
 
 // ============================================
