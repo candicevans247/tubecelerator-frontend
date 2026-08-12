@@ -7,7 +7,7 @@ const app = express();
 app.use(bodyParser.json());
 
 const { bot } = require('./telegram-bot');
-const { expireOldCredits } = require('./credits');
+const { expireOldCredits, getCredits, useCredits, addCredits } = require('./credits');
 
 // ✅ Use webhooks instead of polling (serverless-compatible)
 const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || process.env.RAILWAY_PUBLIC_DOMAIN;
@@ -41,6 +41,126 @@ if (WEBHOOK_DOMAIN) {
 app.get('/', (req, res) => {
   res.send('Syinth Telegram Bot is running 🚀');
 });
+
+// ============================================
+// 💰 CREDIT RECONCILIATION
+// ============================================
+
+// Receives reconciliation data from worker and applies the credit op.
+// Worker does the math, frontend does the credit operation.
+//
+// Returns the reconciliation object with applied/amountApplied filled in,
+// ready to be forwarded to notifyVideoComplete for the user message.
+
+async function applyReconciliation(reconciliation) {
+  const {
+    user_id,
+    job_id,
+    difference,
+    estimatedMinutes,
+    actualMinutes,
+    estimatedCredits,
+    actualCredits,
+    totalAudioSeconds
+  } = reconciliation;
+
+  // ── No change ─────────────────────────────────────────────────────────────
+  if (difference === 0) {
+    console.log(`💰 [reconciler] Job ${job_id} — no credit adjustment needed`);
+    return {
+      ...reconciliation,
+      action:        'none',
+      applied:       true,
+      amountApplied: 0,
+      reason:        'Estimated and actual match exactly'
+    };
+  }
+
+  // ── Refund — video shorter than estimated ─────────────────────────────────
+  if (difference > 0) {
+    const transactionId = `reconcile_refund_job${job_id}_${Date.now()}`;
+
+    const result = await addCredits(
+      String(user_id),
+      difference,
+      transactionId,
+      'duration_reconcile_refund'
+    );
+
+    if (result.alreadyProcessed) {
+      console.warn(
+        `⚠️ [reconciler] Refund already processed for job ${job_id}`
+      );
+      return {
+        ...reconciliation,
+        action:        'refund',
+        applied:       false,
+        amountApplied: 0,
+        reason:        'Already processed'
+      };
+    }
+
+    console.log(
+      `✅ [reconciler] Refunded ${difference}cr ` +
+      `to user ${user_id} for job ${job_id}`
+    );
+
+    return {
+      ...reconciliation,
+      action:        'refund',
+      applied:       true,
+      amountApplied: difference,
+      reason:        `Video ${estimatedMinutes - actualMinutes} min shorter than estimated`
+    };
+  }
+
+  // ── Surcharge — video longer than estimated ───────────────────────────────
+  if (difference < 0) {
+    const surchargeAmount = Math.abs(difference);
+
+    const creditInfo     = await getCredits(String(user_id));
+    const currentBalance = creditInfo.amount;
+
+    let amountToCharge = surchargeAmount;
+    let partial        = false;
+
+    // Charge what they have if balance is insufficient
+    if (currentBalance < surchargeAmount) {
+      console.warn(
+        `⚠️ [reconciler] User ${user_id} has ${currentBalance}cr ` +
+        `but surcharge is ${surchargeAmount}cr — partial charge`
+      );
+      amountToCharge = currentBalance;
+      partial        = true;
+    }
+
+    if (amountToCharge > 0) {
+      const result = await useCredits(String(user_id), amountToCharge);
+
+      if (!result.success) {
+        throw new Error(result.reason || 'useCredits failed');
+      }
+
+      console.log(
+        `✅ [reconciler] Surcharged ${amountToCharge}cr ` +
+        `from user ${user_id} for job ${job_id} ` +
+        `(remaining: ${result.remaining})`
+      );
+    }
+
+    return {
+      ...reconciliation,
+      action:        'surcharge',
+      applied:       true,
+      partial:       partial,
+      amountApplied: amountToCharge,
+      reason:        partial
+        ? `Partial surcharge — low balance (needed ${surchargeAmount}, charged ${amountToCharge})`
+        : `Video ${actualMinutes - estimatedMinutes} min longer than estimated`
+    };
+  }
+}
+
 
 // ============================================
 // HTTP ENDPOINTS FOR WORKER NOTIFICATIONS
@@ -175,15 +295,45 @@ app.post('/notify/audio-review', async (req, res) => {
 // ── Video complete ────────────────────────────────────────────────
 app.post('/notify/video-complete', async (req, res) => {
   try {
-    const { id, user_id, result_video } = req.body;
-    await notifyVideoComplete({ id, user_id, result_video });
+    const { id, user_id, result_video, reconciliation } = req.body;
+
+    // ── Apply credit reconciliation ───────────────────────────────
+    // Worker calculated the diff — we own credits.js so we do the op here
+    let appliedReconciliation = null;
+
+    if (reconciliation && reconciliation.difference !== 0) {
+      try {
+        appliedReconciliation = await applyReconciliation(reconciliation);
+      } catch (reconcileErr) {
+        // Non-fatal — video delivery must not be blocked by credit errors
+        console.error(
+          `⚠️ Credit reconciliation failed for job ${id}: ${reconcileErr.message}`
+        );
+        // Pass the raw reconciliation so bot can still show the breakdown
+        // even if the credit op failed — admin can manually fix
+        appliedReconciliation = {
+          ...reconciliation,
+          applied:       false,
+          amountApplied: 0,
+          reason:        reconcileErr.message
+        };
+      }
+    }
+
+    // ── Forward to bot ────────────────────────────────────────────
+    await notifyVideoComplete({
+      id,
+      user_id,
+      result_video,
+      reconciliation: appliedReconciliation
+    });
+
     res.json({ success: true, message: 'Video complete notification sent' });
   } catch (error) {
     console.error('Video complete notification error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 // --- Start Server ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
