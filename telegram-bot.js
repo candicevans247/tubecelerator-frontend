@@ -543,7 +543,7 @@ async function submitVideoJob(ctx, userData) {
       }
 
       // Approval-required user
-     if (ctx.chat.id === APPROVAL_REQUIRED_USER) {
+      if (ctx.chat.id === APPROVAL_REQUIRED_USER) {
   const { mode, inputText, videotype, voice, content_flow, mediaMode, duration } = userData;
   for (const adminId of ADMIN_IDS) {
     await bot.telegram.sendMessage(
@@ -593,6 +593,17 @@ for (const adminId of ADMIN_IDS) {
     `✍️ Input:\n${escapeMarkdown(inputText.substring(0, 500))}${inputText.length > 500 ? '...' : ''}`,
     { parse_mode: 'Markdown' }
   );
+}
+
+      return true;
+    } else {
+      throw new Error(response.data.message || 'Failed to submit job');
+    }
+  } catch (error) {
+    console.error('Error submitting job:', error);
+    await ctx.reply('❌ Failed to submit job. Please try again.');
+    return false;
+  }
 }
 
 // ============================================
