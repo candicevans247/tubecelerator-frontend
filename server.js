@@ -217,12 +217,16 @@ app.post('/notify/segment-upload-request', async (req, res) => {
   try {
     const { 
       id, user_id, segmentIndex, 
-      totalSegments, segmentText, query 
+      totalSegments, segmentText, 
+      query, mediaType,
+      isReserved
     } = req.body;
 
     await notifySegmentUploadRequest({ 
       id, user_id, segmentIndex, 
-      totalSegments, segmentText, query 
+      totalSegments, segmentText, 
+      query, mediaType,
+      isReserved
     });
 
     res.json({ success: true, message: 'Upload request notification sent' });
