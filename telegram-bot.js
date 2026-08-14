@@ -2603,57 +2603,68 @@ if (callbackData === 'confirm_audio_generate') {
 
     // ── Image segment upload ──────────────────────────────────────────
     if (callbackData.startsWith('upload_segment_')) {
-      const parts        = callbackData.split('_');
-      const jobId        = parts[2];
-      const segmentIndex = parts[3];
-
-      const userData = userStates.get(ctx.chat.id) || {};
-      userData.uploadingSegmentImage = { jobId, segmentIndex: parseInt(segmentIndex) };
-      userStates.set(ctx.chat.id, userData);
-
-      await ctx.editMessageCaption(`📤 *Upload Image for Segment ${parseInt(segmentIndex) + 1}*\n\nPlease send your image now:`, { parse_mode: 'Markdown' });
-      await ctx.answerCbQuery('Send your image');
-      return;
-    }
-
-    // ── Video segment upload (user uploads their own video) ──────────
-if (callbackData.startsWith('upload_video_')) {
   const parts        = callbackData.split('_');
-  // callback_data format: upload_video_{jobId}_{segmentIndex}
   const jobId        = parts[2];
   const segmentIndex = parts[3];
 
   const userData = userStates.get(ctx.chat.id) || {};
+  userData.uploadingSegmentImage = { jobId, segmentIndex: parseInt(segmentIndex) };
+  userStates.set(ctx.chat.id, userData);
 
-  // Store upload intent — bot.on('video') will read this
-  userData.uploadingSegmentVideo = { 
-    jobId, 
-    segmentIndex: parseInt(segmentIndex) 
+  try {
+    // Message has a photo/video — edit caption
+    await ctx.editMessageCaption(
+      `📤 *Upload Image for Segment ${parseInt(segmentIndex) + 1}*\n\nPlease send your image now:`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (editErr) {
+    // Message is plain text (e.g. from manual mode upload request) — edit text instead
+    try {
+      await ctx.editMessageText(
+        `📤 *Upload Image for Segment ${parseInt(segmentIndex) + 1}*\n\nPlease send your image now:`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (textErr) {
+      // If both fail, just send a new message
+      await ctx.reply(
+        `📤 *Upload Image for Segment ${parseInt(segmentIndex) + 1}*\n\nPlease send your image now:`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+  }
+
+  await ctx.answerCbQuery('Send your image');
+  return;
+}
+    // ── Video segment upload (user uploads their own video) ──────────
+if (callbackData.startsWith('upload_video_')) {
+  const parts        = callbackData.split('_');
+  const jobId        = parts[2];
+  const segmentIndex = parts[3];
+
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.uploadingSegmentVideo = {
+    jobId,
+    segmentIndex: parseInt(segmentIndex)
   };
   userStates.set(ctx.chat.id, userData);
 
-  // Try to edit caption if it's a video message, else edit text
+  const uploadMsg =
+    `📤 *Upload Video for Segment ${parseInt(segmentIndex) + 1}*\n\n` +
+    `Please send your video clip now:\n\n` +
+    `📋 *Requirements:*\n` +
+    `• Max size: 50MB\n` +
+    `• Formats: MP4, MOV, AVI\n` +
+    `• Recommended: landscape for longform, portrait for shorts/reels`;
+
   try {
-    await ctx.editMessageCaption(
-      `📤 *Upload Video for Segment ${parseInt(segmentIndex) + 1}*\n\n` +
-      `Please send your video clip now:\n\n` +
-      `📋 *Requirements:*\n` +
-      `• Max size: 50MB\n` +
-      `• Formats: MP4, MOV, AVI\n` +
-      `• Recommended: landscape for longform, portrait for shorts/reels`,
-      { parse_mode: 'Markdown' }
-    );
-  } catch (editError) {
-    // If editing fails (e.g. message is text), send new message
-    await ctx.reply(
-      `📤 *Upload Video for Segment ${parseInt(segmentIndex) + 1}*\n\n` +
-      `Please send your video clip now:\n\n` +
-      `📋 *Requirements:*\n` +
-      `• Max size: 50MB\n` +
-      `• Formats: MP4, MOV, AVI\n` +
-      `• Recommended: landscape for longform, portrait for shorts/reels`,
-      { parse_mode: 'Markdown' }
-    );
+    await ctx.editMessageCaption(uploadMsg, { parse_mode: 'Markdown' });
+  } catch (editErr) {
+    try {
+      await ctx.editMessageText(uploadMsg, { parse_mode: 'Markdown' });
+    } catch (textErr) {
+      await ctx.reply(uploadMsg, { parse_mode: 'Markdown' });
+    }
   }
 
   await ctx.answerCbQuery('Send your video clip now 📤');
