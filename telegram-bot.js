@@ -760,25 +760,49 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
     throw error;
   }
 }
-async function notifySegmentUploadRequest({ id, user_id, segmentIndex, totalSegments, segmentText, query }) {
+
+async function notifySegmentUploadRequest({ 
+  id, user_id, segmentIndex, totalSegments, 
+  segmentText, query, mediaType = 'images',
+  isReserved = false
+}) {
   try {
+    const isVideo     = mediaType === 'videos';
+    const mediaLabel  = isVideo ? 'Video' : 'Image';
+    const uploadEmoji = isVideo ? '🎬' : '📸';
+
+    const reservedNote = isReserved
+      ? `\n\n🔖 *Note:* This segment has a like & subscribe overlay — ` +
+        `your ${mediaLabel.toLowerCase()} will appear as the background behind it.`
+      : '';
+
     await bot.telegram.sendMessage(
       user_id,
-      `📸 *Upload Image for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
-      `📝 *Script:*\n_${segmentText.substring(0, 250)}${segmentText.length > 250 ? '...' : ''}_\n\n` +
-      `💡 *Suggested search:* "${query}"\n\n` +
-      `👇 Click the button below, then send your image:`,
+      `${uploadEmoji} *Upload ${mediaLabel} for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
+      `📝 *Script:*\n_${segmentText.substring(0, 250)}` +
+      `${segmentText.length > 250 ? '...' : ''}_\n\n` +
+      `💡 *Suggested search:* "${query}"` +
+      reservedNote +
+      `\n\n👇 Tap the button below, then send your ${mediaLabel.toLowerCase()}:`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [[
-            { text: '📤 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` }
+            {
+              text:          `${uploadEmoji} Upload ${mediaLabel}`,
+              callback_data: isVideo
+                ? `upload_video_${id}_${segmentIndex}`
+                : `upload_segment_${id}_${segmentIndex}`
+            }
           ]]
         }
       }
     );
   } catch (error) {
-    console.error(`❌ Failed to request upload for segment ${segmentIndex + 1}:`, error.message);
+    console.error(
+      `❌ Failed to request upload for segment ${segmentIndex + 1}:`,
+      error.message
+    );
     throw error;
   }
 }
