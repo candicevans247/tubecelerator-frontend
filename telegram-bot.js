@@ -825,6 +825,50 @@ async function notifyAllImagesComplete({ id, user_id }) {
   }
 }
 
+async function notifySegmentsReady({ 
+  id, user_id, totalSegments, mediaType, mediaMode,
+  imageCount, videoCount 
+}) {
+  try {
+    let mediaBreakdown = '';
+
+    if (mediaType === 'mixed') {
+      mediaBreakdown =
+        `\n\n📊 *Media Breakdown:*\n` +
+        `🖼️ Images needed: *${imageCount}*\n` +
+        `🎬 Videos needed: *${videoCount}*`;
+    } else if (mediaType === 'videos') {
+      mediaBreakdown =
+        `\n\n📊 *Media Needed:*\n` +
+        `🎬 Videos: *${totalSegments}*`;
+    } else {
+      mediaBreakdown =
+        `\n\n📊 *Media Needed:*\n` +
+        `🖼️ Images: *${totalSegments}*`;
+    }
+
+    const modeNote = mediaMode === 'manual'
+      ? `\n\n📤 *You'll be prompted to upload each ${
+          mediaType === 'mixed'   ? 'image/video' :
+          mediaType === 'videos'  ? 'video' : 'image'
+        } one at a time.*\n` +
+        `⏳ Stand by — your first upload prompt is coming up!`
+      : `\n\n🔍 *Assets will be fetched automatically.*\n` +
+        `⏳ Stand by — you'll be asked to review each one shortly!`;
+
+    await bot.telegram.sendMessage(
+      user_id,
+      `✂️ *Script Breakdown Complete!*\n\n` +
+      `Your script has been split into *${totalSegments} segment(s)*.` +
+      mediaBreakdown +
+      modeNote,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error(`❌ Failed to send segments ready notification:`, error.message);
+  }
+}
+
 async function notifySegmentVideoForReview({
   id, user_id, segmentIndex, totalSegments,
   segmentText, videoUrl, query, isPlaceholder
@@ -3891,6 +3935,7 @@ checkStorageHealth().then(healthy => {
 module.exports = {
   bot,
   notifyScriptForReview,
+  notifySegmentsReady, 
   notifySegmentImageForReview,
   notifySegmentUploadRequest,
   notifyAllImagesComplete,
