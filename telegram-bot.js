@@ -763,13 +763,14 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
 
 async function notifySegmentUploadRequest({ 
   id, user_id, segmentIndex, totalSegments, 
-  segmentText, query, mediaType = 'images',
+  segmentText, query, mediaType = 'image',
   isReserved = false
 }) {
-  try {
-    const isVideo     = mediaType === 'videos';
-    const mediaLabel  = isVideo ? 'Video' : 'Image';
-    const uploadEmoji = isVideo ? '🎬' : '📸';
+  // Worker sends 'video' or 'image' (singular)
+  // Guard against both singular and plural forms for safety
+  const isVideo     = mediaType === 'video' || mediaType === 'videos';
+  const mediaLabel  = isVideo ? 'Video' : 'Image';
+  const uploadEmoji = isVideo ? '🎬' : '📸';
 
     const reservedNote = isReserved
       ? `\n\n🔖 *Note:* This segment has a like & subscribe overlay — ` +
