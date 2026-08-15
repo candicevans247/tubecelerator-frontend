@@ -772,6 +772,7 @@ async function notifySegmentUploadRequest({
   const mediaLabel  = isVideo ? 'Video' : 'Image';
   const uploadEmoji = isVideo ? '🎬' : '📸';
 
+  try {
     const reservedNote = isReserved
       ? `\n\n🔖 *Note:* This segment has a like & subscribe overlay — ` +
         `your ${mediaLabel.toLowerCase()} will appear as the background behind it.`
