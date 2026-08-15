@@ -169,6 +169,7 @@ async function applyReconciliation(reconciliation) {
 // ✅ Import ALL notification functions — including the two new video ones
 const { 
   notifyScriptForReview, 
+  notifySegmentsReady, 
   notifySegmentImageForReview, 
   notifySegmentUploadRequest,
   notifyAllImagesComplete,
@@ -208,6 +209,28 @@ app.post('/notify/segment-image-review', async (req, res) => {
     res.json({ success: true, message: 'Segment image review notification sent' });
   } catch (error) {
     console.error('Segment image review notification error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ── Segments ready ────────────────────────────────────────────────
+app.post('/notify/segments-ready', async (req, res) => {
+  try {
+    const { 
+      id, user_id, totalSegments, 
+      mediaType, mediaMode,
+      imageCount, videoCount 
+    } = req.body;
+
+    await notifySegmentsReady({ 
+      id, user_id, totalSegments, 
+      mediaType, mediaMode,
+      imageCount, videoCount 
+    });
+
+    res.json({ success: true, message: 'Segments ready notification sent' });
+  } catch (error) {
+    console.error('Segments ready notification error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
