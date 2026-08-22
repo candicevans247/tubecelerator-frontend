@@ -77,15 +77,15 @@ async function applyReconciliation(reconciliation) {
   }
 
   // ── Refund — video shorter than estimated ─────────────────────────────────
-  if (difference > 0) {
-    const transactionId = `reconcile_refund_job${job_id}_${Date.now()}`;
-
-    const result = await addCredits(
-      String(user_id),
-      difference,
-      transactionId,
-      'duration_reconcile_refund'
-    );
+ if (difference > 0) {
+  const transactionId = `reconcile_refund_job${job_id}_${Date.now()}`;
+  const result = await addCredits(
+    String(user_id),
+    difference,
+    transactionId,
+    'duration_reconcile_refund',
+    true  // ← preserveExpiry = true, don't extend their plan
+  );
 
     if (result.alreadyProcessed) {
       console.warn(
