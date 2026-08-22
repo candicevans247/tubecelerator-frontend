@@ -101,63 +101,82 @@ async function setCredits(telegramId, count, transactionId = null, operationType
 }
 
 // ✅ UPDATED: Add credits (adds to existing, extends expiration)
-async function addCredits(telegramId, count, transactionId = null, operationType = 'manual') {
+// ── preserveExpiry: if true, keeps existing expires_at unchanged ──
+async function addCredits(
+  telegramId,
+  count,
+  transactionId = null,
+  operationType = 'manual',
+  preserveExpiry = false        // ← NEW parameter
+) {
   telegramId = String(telegramId);
-  
+
   if (!transactionId) {
     transactionId = `add_${telegramId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
   try {
     await pool.query('BEGIN');
-    
+
     const existing = await pool.query(
       'SELECT * FROM credit_transactions WHERE telegram_id = $1 AND transaction_id = $2',
       [telegramId, transactionId]
     );
-    
+
     if (existing.rows.length > 0) {
       console.log(`✅ Transaction ${transactionId} already processed - skipping`);
       await pool.query('ROLLBACK');
       return { success: true, alreadyProcessed: true };
     }
-    
-    // ✅ NEW: Extend expiration by 30 days from now
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30);
-    
-    // Add credits and update expiration
-    await pool.query(`
-      INSERT INTO credits (telegram_id, credits, expires_at, credited_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (telegram_id) 
-      DO UPDATE SET 
-        credits = credits.credits + EXCLUDED.credits,
-        expires_at = EXCLUDED.expires_at,
-        credited_at = NOW()
-    `, [telegramId, count, expiresAt]);
-    
+
+    if (preserveExpiry) {
+      // ── Add credits without touching expires_at ─────────────
+      await pool.query(`
+        INSERT INTO credits (telegram_id, credits, expires_at, credited_at)
+        VALUES ($1, $2, NULL, NOW())
+        ON CONFLICT (telegram_id)
+        DO UPDATE SET
+          credits     = credits.credits + EXCLUDED.credits,
+          credited_at = NOW()
+          -- expires_at intentionally NOT updated
+      `, [telegramId, count]);
+
+    } else {
+      // ── Normal add — refresh expiry to 30 days ───────────────
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 30);
+
+      await pool.query(`
+        INSERT INTO credits (telegram_id, credits, expires_at, credited_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (telegram_id)
+        DO UPDATE SET
+          credits     = credits.credits + EXCLUDED.credits,
+          expires_at  = EXCLUDED.expires_at,
+          credited_at = NOW()
+      `, [telegramId, count, expiresAt]);
+    }
+
     await pool.query(
       'INSERT INTO credit_transactions (telegram_id, transaction_id, credits, operation_type) VALUES ($1, $2, $3, $4)',
       [telegramId, transactionId, count, operationType]
     );
-    
+
     await pool.query('COMMIT');
-    
-    console.log(`✅ Added ${count} credits to ${telegramId} (expires: ${expiresAt.toDateString()})`);
-    return { 
-      success: true, 
-      alreadyProcessed: false,
-      expiresAt: expiresAt.toISOString()
-    };
-    
+
+    console.log(
+      `✅ Added ${count} credits to ${telegramId} ` +
+      `(preserveExpiry: ${preserveExpiry})`
+    );
+
+    return { success: true, alreadyProcessed: false };
+
   } catch (error) {
     await pool.query('ROLLBACK');
     console.error(`❌ Error in addCredits:`, error);
     throw error;
   }
 }
-
 // ✅ NEW: Reset credits to zero (for expired credits)
 async function resetCredits(telegramId, reason = 'expired') {
   telegramId = String(telegramId);
