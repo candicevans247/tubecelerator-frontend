@@ -1378,6 +1378,69 @@ function isAdmin(ctx) {
 // 👑 ADMIN COMMANDS
 // ============================================
 
+bot.command('refund', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const parts = ctx.message.text.split(' ');
+  if (parts.length !== 3) {
+    return ctx.reply(
+      'Usage: /refund <telegramId> <credits>\n\n' +
+      'This *adds* credits on top of existing balance.\n' +
+      'Use /approve to *set* a specific balance.',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const telegramId = String(parts[1]);
+  const credits    = parseInt(parts[2]);
+
+  if (isNaN(credits) || credits <= 0) {
+    return ctx.reply('❌ Invalid credit amount.');
+  }
+
+  try {
+    const transactionId = `refund_${ctx.from.id}_${telegramId}_${Date.now()}`;
+    const result = await addCredits(
+      telegramId,
+      credits,
+      transactionId,
+      'admin_refund'
+    );
+
+    if (result.alreadyProcessed) {
+      return ctx.reply(`⚠️ This refund was already processed.`);
+    }
+
+    // ── Get updated balance to show admin ─────────────────────
+    const creditInfo = await getCredits(telegramId);
+
+    ctx.reply(
+      `✅ *Refund Issued*\n\n` +
+      `👤 User: ${telegramId}\n` +
+      `➕ Refunded: *${credits}* credit(s)\n` +
+      `💰 New balance: *${creditInfo.amount}* credit(s)\n` +
+      `📅 Expiry unchanged`,
+      { parse_mode: 'Markdown' }
+    );
+
+    // ── Notify user ───────────────────────────────────────────
+    try {
+      await bot.telegram.sendMessage(
+        telegramId,
+        `♻️ *Credit Refund*\n\n` +
+        `*${credits}* credit(s) have been added to your account.\n` +
+        `💰 New balance: *${creditInfo.amount}* credit(s)`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (err) {
+      ctx.reply(`⚠️ Refund applied but could not notify user.`);
+    }
+
+  } catch (error) {
+    ctx.reply(`❌ Error: ${error.message}`);
+  }
+});
+
 bot.command('process', async (ctx) => {
   if (!isAdmin(ctx)) return ctx.reply('❌ Admin only command');
 
