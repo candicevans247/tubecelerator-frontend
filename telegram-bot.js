@@ -1400,12 +1400,13 @@ bot.command('refund', async (ctx) => {
 
   try {
     const transactionId = `refund_${ctx.from.id}_${telegramId}_${Date.now()}`;
-    const result = await addCredits(
-      telegramId,
-      credits,
-      transactionId,
-      'admin_refund'
-    );
+const result = await addCredits(
+  telegramId,
+  credits,
+  transactionId,
+  'admin_refund',
+  true  // ← preserveExpiry = true
+);
 
     if (result.alreadyProcessed) {
       return ctx.reply(`⚠️ This refund was already processed.`);
