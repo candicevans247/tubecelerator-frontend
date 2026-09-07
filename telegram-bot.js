@@ -692,7 +692,10 @@ async function notifyScriptForReview({ id, user_id, script }) {
   }
 }
 
-async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSegments, segmentText, imageUrl, query }) {
+async function notifySegmentImageForReview({ 
+  id, user_id, segmentIndex, totalSegments, 
+  segmentText, imageUrl, query 
+}) {
   try {
     console.log(`📤 Sending image for segment ${segmentIndex + 1} to user ${user_id}`);
 
@@ -704,16 +707,14 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
 
     let imageBuffer = Buffer.from(response.data);
 
-    // ── Resize if dimensions exceed Telegram's limit ──────────────────
-    // Telegram rejects photos where width + height > 10000
-    // or either side > 10000. Resize to safe dimensions before sending.
+    // ── Resize if dimensions exceed Telegram's limit ──────────────
     try {
-      const sharp = require('sharp');
+      const sharp    = require('sharp');
       const metadata = await sharp(imageBuffer).metadata();
       const { width = 0, height = 0 } = metadata;
 
       const needsResize =
-        width + height > 9000 ||   // leave headroom below 10000
+        width + height > 9000 ||
         width > 4500 ||
         height > 4500;
 
@@ -723,7 +724,7 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
         );
         imageBuffer = await sharp(imageBuffer)
           .resize(1280, 1280, {
-            fit: 'inside',          // preserve aspect ratio
+            fit: 'inside',
             withoutEnlargement: true
           })
           .jpeg({ quality: 85 })
@@ -741,22 +742,29 @@ async function notifySegmentImageForReview({ id, user_id, segmentIndex, totalSeg
       {
         caption:
           `🖼️ *Image for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
-          `📝 *Text:* ${segmentText.substring(0, 150)}${segmentText.length > 150 ? '...' : ''}\n\n` +
+          `📝 *Text:* ${segmentText.substring(0, 150)}` +
+          `${segmentText.length > 150 ? '...' : ''}\n\n` +
           `❓ Is this image relevant to this part of your script?`,
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '✅ Approve',      callback_data: `approve_segment_${id}_${segmentIndex}` },
-              { text: '🔄 Refetch',      callback_data: `refetch_segment_${id}_${segmentIndex}` }
+              { text: '✅ Approve',  callback_data: `approve_segment_${id}_${segmentIndex}` },
+              { text: '🔄 Refetch', callback_data: `refetch_segment_${id}_${segmentIndex}` }
             ],
-            [{ text: '📤 Upload My Own', callback_data: `upload_segment_${id}_${segmentIndex}` }]
+            [
+              { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
+              { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
+            ]
           ]
         }
       }
     );
   } catch (error) {
-    console.error(`❌ Failed to send image for segment ${segmentIndex + 1}:`, error.message);
+    console.error(
+      `❌ Failed to send image for segment ${segmentIndex + 1}:`, 
+      error.message
+    );
     throw error;
   }
 }
@@ -766,8 +774,6 @@ async function notifySegmentUploadRequest({
   segmentText, query, mediaType = 'image',
   isReserved = false
 }) {
-  // Worker sends 'video' or 'image' (singular)
-  // Guard against both singular and plural forms for safety
   const isVideo     = mediaType === 'video' || mediaType === 'videos';
   const mediaLabel  = isVideo ? 'Video' : 'Image';
   const uploadEmoji = isVideo ? '🎬' : '📸';
@@ -775,26 +781,34 @@ async function notifySegmentUploadRequest({
   try {
     const reservedNote = isReserved
       ? `\n\n🔖 *Note:* This segment has a like & subscribe overlay — ` +
-        `your ${mediaLabel.toLowerCase()} will appear as the background behind it.`
+        `your media will appear as the background behind it.`
       : '';
+
+    // ── Suggested type label ──────────────────────────────────────
+    const suggestedNote = isVideo
+      ? `\n💡 *Suggested type:* Video _(or upload an image instead)_`
+      : `\n💡 *Suggested type:* Image _(or upload a video instead)_`;
 
     await bot.telegram.sendMessage(
       user_id,
-      `${uploadEmoji} *Upload ${mediaLabel} for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
+      `${uploadEmoji} *Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
       `📝 *Script:*\n_${segmentText.substring(0, 250)}` +
       `${segmentText.length > 250 ? '...' : ''}_\n\n` +
-      `💡 *Suggested search:* "${query}"` +
+      `🔍 *Suggested search:* "${query}"` +
+      suggestedNote +
       reservedNote +
-      `\n\n👇 Tap the button below, then send your ${mediaLabel.toLowerCase()}:`,
+      `\n\n👇 Choose what to upload:`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [[
             {
-              text:          `${uploadEmoji} Upload ${mediaLabel}`,
-              callback_data: isVideo
-                ? `upload_video_${id}_${segmentIndex}`
-                : `upload_segment_${id}_${segmentIndex}`
+              text:          `📸 Upload Image`,
+              callback_data: `upload_segment_${id}_${segmentIndex}`
+            },
+            {
+              text:          `🎬 Upload Video`,
+              callback_data: `upload_video_${id}_${segmentIndex}`
             }
           ]]
         }
@@ -877,21 +891,28 @@ async function notifySegmentVideoForReview({
   const keyboard = isPlaceholder
     ? [
         [
-          { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
-          { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+          { text: '🔄 Refetch',      callback_data: `refetch_video_${id}_${segmentIndex}`  },
+        ],
+        [
+          { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
+          { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
         ]
       ]
     : [
         [
-          { text: '✅ Approve', callback_data: `approve_video_${id}_${segmentIndex}` },
-          { text: '✂️ Trim',   callback_data: `trim_video_${id}_${segmentIndex}`    }
+          { text: '✅ Approve',      callback_data: `approve_video_${id}_${segmentIndex}`  },
+          { text: '✂️ Trim',         callback_data: `trim_video_${id}_${segmentIndex}`     }
         ],
         [
-          { text: '🔄 Refetch',       callback_data: `refetch_video_${id}_${segmentIndex}` },
-          { text: '📤 Upload My Own', callback_data: `upload_video_${id}_${segmentIndex}`  }
+          { text: '🔄 Refetch',      callback_data: `refetch_video_${id}_${segmentIndex}`  },
+        ],
+        [
+          { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
+          { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
         ]
       ];
 
+  // ── rest of the function stays exactly the same ───────────────────
   const placeholderNote = isPlaceholder
     ? `\n\n⚠️ *No footage found.* Refetch or upload your own.`
     : '';
