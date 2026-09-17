@@ -297,9 +297,9 @@ async function notifySegmentClipRequest({
   remainingDuration, clipCount, maxClipDuration = 3
 }) {
   try {
-    const filledBar  = filledDuration.toFixed(1);
-    const targetBar  = targetDuration.toFixed(1);
-    const remaining  = remainingDuration.toFixed(1);
+const filledBar  = filledDuration.toFixed(2);
+const targetBar  = targetDuration.toFixed(2);
+const remaining  = remainingDuration.toFixed(2);
     const pct        = Math.min(100, Math.round((filledDuration / targetDuration) * 100));
 
     // Progress bar (10 blocks)
