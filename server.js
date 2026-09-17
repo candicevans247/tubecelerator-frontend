@@ -176,7 +176,8 @@ const {
   notifySegmentVideoForReview,   
   notifyAllVideosComplete,       
   notifyAudioForReview, 
-  notifyVideoComplete 
+  notifyVideoComplete,
+  notifySegmentClipRequest    
 } = require('./telegram-bot');
 
 // ── Script review ─────────────────────────────────────────────────
@@ -261,18 +262,25 @@ app.post('/notify/clip-collection-started', async (req, res) => {
 });
 
 app.post('/notify/segment-clip-request', async (req, res) => {
+  // Send success immediately so worker isn't blocked
   res.json({ success: true });
+
   const {
     id, user_id, segmentIndex, totalSegments,
     segmentText, filledDuration, targetDuration,
     remainingDuration, clipCount, maxClipDuration
   } = req.body;
 
-  await notifySegmentClipRequest({
-    id, user_id, segmentIndex, totalSegments,
-    segmentText, filledDuration, targetDuration,
-    remainingDuration, clipCount, maxClipDuration
-  });
+  try {
+    await notifySegmentClipRequest({
+      id, user_id, segmentIndex, totalSegments,
+      segmentText, filledDuration, targetDuration,
+      remainingDuration, clipCount, maxClipDuration
+    });
+  } catch (err) {
+    // Now you'll actually see errors in logs instead of silent failures
+    console.error('segment-clip-request notification failed:', err.message);
+  }
 });
 
 app.post('/notify/clips-complete', async (req, res) => {
