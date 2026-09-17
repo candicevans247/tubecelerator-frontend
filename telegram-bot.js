@@ -291,6 +291,64 @@ bot.action('noop', async (ctx) => {
 // 🛠️ HELPERS
 // ============================================
 
+async function notifySegmentClipRequest({
+  id, user_id, segmentIndex, totalSegments,
+  segmentText, filledDuration, targetDuration,
+  remainingDuration, clipCount, maxClipDuration = 3
+}) {
+  try {
+    const filledBar  = filledDuration.toFixed(1);
+    const targetBar  = targetDuration.toFixed(1);
+    const remaining  = remainingDuration.toFixed(1);
+    const pct        = Math.min(100, Math.round((filledDuration / targetDuration) * 100));
+
+    // Progress bar (10 blocks)
+    const filled     = Math.round(pct / 10);
+    const empty      = 10 - filled;
+    const progressBar = '█'.repeat(filled) + '░'.repeat(empty);
+
+    const isFirstClip = clipCount === 0;
+    const headerMsg   = isFirstClip
+      ? `🎬 *Segment ${segmentIndex + 1}/${totalSegments} — Upload Clips*`
+      : `🎬 *Segment ${segmentIndex + 1}/${totalSegments} — Add More Clips*`;
+
+    await bot.telegram.sendMessage(
+      user_id,
+      `${headerMsg}\n\n` +
+      `📝 _${segmentText.substring(0, 200)}${segmentText.length > 200 ? '...' : ''}_\n\n` +
+      `⏱ *Progress:*\n` +
+      `${progressBar} ${pct}%\n` +
+      `Filled: *${filledBar}s* / *${targetBar}s* needed\n` +
+      `Remaining: *${remaining}s*\n\n` +
+      `📋 *Rules:*\n` +
+      `• Each video clip auto-trimmed to ≤${maxClipDuration}s\n` +
+      `• Upload multiple clips to fill the duration\n` +
+      `• Or upload an image to fill remaining time`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            {
+              text:          '🎬 Upload Video Clip',
+              callback_data: `upload_clip_video_${id}_${segmentIndex}`
+            },
+            {
+              text:          '🖼️ Upload Image',
+              callback_data: `upload_clip_image_${id}_${segmentIndex}`
+            }
+          ]]
+        }
+      }
+    );
+  } catch (error) {
+    console.error(
+      `❌ Failed to send clip request for segment ${segmentIndex + 1}:`,
+      error.message
+    );
+    throw error;
+  }
+}
+
 function buildReconciliationMessage(reconciliation) {
   if (!reconciliation) return '';
 
@@ -2527,6 +2585,140 @@ bot.on('callback_query', async (ctx) => {
   console.log('Callback:', callbackData, '| User:', ctx.from.id);
 
   try {
+    // ── Upload video clip (manual clip-filling mode) ──────────────────
+if (callbackData.startsWith('upload_clip_video_')) {
+  const parts        = callbackData.split('_');
+  // format: upload_clip_video_{jobId}_{segmentIndex}
+  const jobId        = parts[3];
+  const segmentIndex = parseInt(parts[4]);
+
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.uploadingClipVideo = { jobId, segmentIndex };
+  userStates.set(ctx.chat.id, userData);
+
+  try {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  } catch (_) {}
+
+  await ctx.reply(
+    `🎬 *Upload Video Clip for Segment ${segmentIndex + 1}*\n\n` +
+    `Send your video clip now.\n\n` +
+    `⚠️ It will be automatically trimmed to ≤3 seconds.`,
+    { parse_mode: 'Markdown' }
+  );
+
+  await ctx.answerCbQuery('Send your video clip 🎬');
+  return;
+}
+
+// ── Upload image clip (manual clip-filling mode) ──────────────────
+if (callbackData.startsWith('upload_clip_image_')) {
+  const parts        = callbackData.split('_');
+  // format: upload_clip_image_{jobId}_{segmentIndex}
+  const jobId        = parts[3];
+  const segmentIndex = parseInt(parts[4]);
+
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.uploadingClipImage = { jobId, segmentIndex };
+  userStates.set(ctx.chat.id, userData);
+
+  try {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  } catch (_) {}
+
+  await ctx.reply(
+    `🖼️ *Upload Image for Segment ${segmentIndex + 1}*\n\n` +
+    `Send your image now.\n\n` +
+    `✨ It will fill the remaining segment duration with motion effects.`,
+    { parse_mode: 'Markdown' }
+  );
+
+  await ctx.answerCbQuery('Send your image 🖼️');
+  return;
+}
+
+// ── Proceed to next segment (after image upload with clips existing) ─
+if (callbackData.startsWith('proceed_segment_')) {
+  const parts        = callbackData.split('_');
+  const jobId        = parts[2];
+  const segmentIndex = parseInt(parts[3]);
+
+  try {
+    await ctx.answerCbQuery('Moving to next segment...');
+
+    const response = await axios.post(
+      `${WORKER_BASE_URL}/proceed-segment`,
+      { jobId: parseInt(jobId), segmentIndex }
+    );
+
+    if (response.data.success) {
+      await wakeWorker(jobId, 'segment_proceeded');
+
+      try {
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      } catch (_) {}
+
+      await ctx.reply(
+        `✅ *Segment ${segmentIndex + 1} complete!*\n\nMoving to next segment...`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await ctx.reply('❌ Failed to proceed. Please try again.');
+    }
+  } catch (err) {
+    console.error('Proceed segment error:', err.message);
+    await ctx.reply('❌ Error. Please try again.');
+  }
+  return;
+}
+
+// ── Add more clips to segment ──────────────────────────────────────
+if (callbackData.startsWith('add_more_clips_')) {
+  const parts        = callbackData.split('_');
+  const jobId        = parts[3];
+  const segmentIndex = parseInt(parts[4]);
+
+  await ctx.answerCbQuery('Upload more clips');
+
+  try {
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  } catch (_) {}
+
+  // Re-fetch current state
+  const jobInfo = await getJobInfo(parseInt(jobId));
+  if (!jobInfo) {
+    return ctx.reply('❌ Job not found.');
+  }
+
+  const seg             = (jobInfo.segments || [])[segmentIndex];
+  const filledDuration  = seg?.clipsDurationFilled  || 0;
+  const targetDuration  = seg?.clipsTargetDuration  || seg?.duration || 5;
+  const remainingDuration = Math.max(0, targetDuration - filledDuration);
+
+  await ctx.reply(
+    `🎬 *Segment ${segmentIndex + 1} — Add More Clips*\n\n` +
+    `⏱ Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+    `Remaining: *${remainingDuration.toFixed(1)}s*\n\n` +
+    `Upload another clip:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          {
+            text:          '🎬 Upload Video Clip',
+            callback_data: `upload_clip_video_${jobId}_${segmentIndex}`
+          },
+          {
+            text:          '🖼️ Upload Image',
+            callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
+          }
+        ]]
+      }
+    }
+  );
+  return;
+}
+    
     // ── Admin delete template confirmation ────────────────────────────
 if (callbackData.startsWith('admin_del_template_')) {
   if (!isAdmin(ctx)) return ctx.answerCbQuery('❌ Admin only', true);
@@ -3093,6 +3285,115 @@ bot.on('video', async (ctx) => {
     return;
   }
 
+  // ── Priority 3.5: Manual clip-filling mode — video clip upload ────
+if (state?.uploadingClipVideo) {
+  const { jobId, segmentIndex } = state.uploadingClipVideo;
+
+  try {
+    const jobInfo = await getJobInfo(jobId);
+    if (!jobInfo) return ctx.reply('❌ Job not found. Please restart with /start');
+
+    const video = ctx.message.video;
+
+    if (video.file_size && video.file_size > 100 * 1024 * 1024) {
+      return ctx.reply('❌ Video too large. Max 100MB.');
+    }
+
+    await ctx.reply('📥 Uploading and trimming your clip...');
+
+    const fileInfo = await ctx.telegram.getFile(video.file_id);
+    const fileUrl  = getTelegramFileUrl(fileInfo.file_path);
+
+    const response   = await axios.get(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout: 120000
+    });
+
+    const fileBuffer = Buffer.from(response.data);
+    const ext        = fileInfo.file_path.split('.').pop() || 'mp4';
+    const rawKey     = `jobs/${jobId}/clips/raw-seg${segmentIndex}-${Date.now()}.${ext}`;
+    const rawUrl     = await uploadFile(rawKey, fileBuffer, `video/${ext}`);
+
+    // Tell worker to trim and add clip
+    const updateResponse = await axios.post(
+      `${WORKER_BASE_URL}/upload-clip-video`,
+      {
+        jobId:         parseInt(jobId),
+        segmentIndex,
+        videoUrl:      rawUrl,
+        videoDuration: video.duration || 5,
+        source:        'user_upload'
+      }
+    );
+
+    if (!updateResponse.data.success) {
+      throw new Error(updateResponse.data.error || 'Failed to add clip');
+    }
+
+    const {
+      filledDuration,
+      targetDuration,
+      isComplete,
+      remaining,
+      clipDuration
+    } = updateResponse.data;
+
+    // Clear upload state
+    delete state.uploadingClipVideo;
+    userStates.set(ctx.chat.id, state);
+
+    const pct      = Math.min(100, Math.round((filledDuration / targetDuration) * 100));
+    const filled   = Math.round(pct / 10);
+    const empty    = 10 - filled;
+    const bar      = '█'.repeat(filled) + '░'.repeat(empty);
+
+    if (isComplete) {
+      // Segment filled — wake worker for next segment
+      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+        jobId,
+        action:    'clip_video_uploaded',
+        timestamp: Date.now()
+      });
+
+      return ctx.reply(
+        `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
+        `${bar} ${pct}%\n` +
+        `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n\n` +
+        `✅ *Segment complete!* Moving to next...`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      // More clips needed — prompt user
+      return ctx.reply(
+        `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
+        `${bar} ${pct}%\n` +
+        `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+        `Remaining: *${remaining.toFixed(1)}s*\n\n` +
+        `Upload another clip or image to fill the remaining time:`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              {
+                text:          '🎬 Upload Video Clip',
+                callback_data: `upload_clip_video_${jobId}_${segmentIndex}`
+              },
+              {
+                text:          '🖼️ Upload Image',
+                callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
+              }
+            ]]
+          }
+        }
+      );
+    }
+
+  } catch (error) {
+    console.error('Error uploading clip video:', error);
+    return ctx.reply('❌ Failed to upload clip. Please try again.');
+  }
+}
+
   // ── Priority 4: USER uploading their own video for a segment ────
   // This is the NEW path - triggered by upload_video_ callback
   if (state?.uploadingSegmentVideo) {
@@ -3279,6 +3580,110 @@ bot.on('photo', async (ctx) => {
     }
   }
 
+  // ── Manual clip-filling mode — image clip upload ──────────────────
+if (userData.uploadingClipImage) {
+  const { jobId, segmentIndex } = userData.uploadingClipImage;
+
+  try {
+    const jobInfo = await getJobInfo(jobId);
+    if (!jobInfo) return ctx.reply('❌ Job not found.');
+
+    const photo    = ctx.message.photo[ctx.message.photo.length - 1];
+    const fileInfo = await ctx.telegram.getFile(photo.file_id);
+    const fileUrl  = getTelegramFileUrl(fileInfo.file_path);
+
+    await ctx.reply('📥 Uploading your image...');
+
+    const response   = await axios.get(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout: 60000
+    });
+
+    const fileBuffer = Buffer.from(response.data);
+    const ext        = fileInfo.file_path.split('.').pop() || 'jpg';
+    const imgKey     = `jobs/${jobId}/clips/img-seg${segmentIndex}-${Date.now()}.${ext}`;
+    const imgUrl     = await uploadFile(imgKey, fileBuffer, `image/${ext}`);
+
+    // Tell worker to add as image clip
+    const updateResponse = await axios.post(
+      `${WORKER_BASE_URL}/upload-clip-image`,
+      {
+        jobId:         parseInt(jobId),
+        segmentIndex,
+        imageUrl:      imgUrl,
+        source:        'user_upload'
+      }
+    );
+
+    if (!updateResponse.data.success) {
+      throw new Error(updateResponse.data.error || 'Failed to add image clip');
+    }
+
+    const {
+      filledDuration,
+      targetDuration,
+      imageDuration
+    } = updateResponse.data;
+
+    const pct    = Math.min(100, Math.round((filledDuration / targetDuration) * 100));
+    const filled = Math.round(pct / 10);
+    const empty  = 10 - filled;
+    const bar    = '█'.repeat(filled) + '░'.repeat(empty);
+
+    // Clear upload state
+    delete userData.uploadingClipImage;
+    userStates.set(ctx.chat.id, userData);
+
+    // Check if there were already video clips before this image
+    const seg       = (jobInfo.segments || [])[segmentIndex];
+    const hadClips  = (seg?.clips || []).some(c => c.type === 'video');
+
+    if (hadClips) {
+      // Image uploaded when clips already exist → ask proceed or add more
+      return ctx.reply(
+        `🖼️ *Image added!* (fills ${imageDuration.toFixed(1)}s)\n\n` +
+        `${bar} ${pct}%\n` +
+        `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n\n` +
+        `What would you like to do?`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              {
+                text:          '✅ Proceed to Next Segment',
+                callback_data: `proceed_segment_${jobId}_${segmentIndex}`
+              },
+              {
+                text:          '➕ Add More Clips',
+                callback_data: `add_more_clips_${jobId}_${segmentIndex}`
+              }
+            ]]
+          }
+        }
+      );
+    } else {
+      // Image is the only/first media — always proceed
+      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+        jobId,
+        action:    'clip_image_uploaded',
+        timestamp: Date.now()
+      });
+
+      return ctx.reply(
+        `✅ *Image added with motion effects!* (${imageDuration.toFixed(1)}s)\n\n` +
+        `${bar} ${pct}%\n` +
+        `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n\n` +
+        `✅ *Segment complete!* Moving to next...`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+  } catch (error) {
+    console.error('Error uploading clip image:', error);
+    return ctx.reply('❌ Failed to upload image. Please try again.');
+  }
+}
+  
   if (userData.uploadingSegmentImage) {
     const { jobId, segmentIndex } = userData.uploadingSegmentImage;
 
