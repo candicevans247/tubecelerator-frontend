@@ -4432,5 +4432,6 @@ module.exports = {
   notifySegmentVideoForReview,
   notifyAllVideosComplete,
   notifyAudioForReview,
-  notifyVideoComplete
+  notifyVideoComplete,
+  notifySegmentClipRequest    
 };
