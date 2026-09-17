@@ -235,6 +235,61 @@ app.post('/notify/segments-ready', async (req, res) => {
   }
 });
 
+app.post('/notify/clip-collection-started', async (req, res) => {
+  res.json({ success: true });
+  const { id, user_id, mediaMode, mediaType } = req.body;
+
+  const modeLabel = mediaMode === 'manual'
+    ? `📤 *You'll be prompted to upload clips for each segment.*`
+    : `🔍 *Video clips are being fetched automatically.*`;
+
+  const typeNote = mediaType === 'images'
+    ? `🖼️ Images with motion effects will be used.`
+    : `🎬 Video clips (max 3s each) will be collected.`;
+
+  try {
+    await bot.telegram.sendMessage(
+      user_id,
+      `✅ *Audio Approved!*\n\n` +
+      `Now collecting media clips...\n\n` +
+      `${typeNote}\n${modeLabel}`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    console.error(`Failed to notify clip collection started:`, err.message);
+  }
+});
+
+app.post('/notify/segment-clip-request', async (req, res) => {
+  res.json({ success: true });
+  const {
+    id, user_id, segmentIndex, totalSegments,
+    segmentText, filledDuration, targetDuration,
+    remainingDuration, clipCount, maxClipDuration
+  } = req.body;
+
+  await notifySegmentClipRequest({
+    id, user_id, segmentIndex, totalSegments,
+    segmentText, filledDuration, targetDuration,
+    remainingDuration, clipCount, maxClipDuration
+  });
+});
+
+app.post('/notify/clips-complete', async (req, res) => {
+  res.json({ success: true });
+  const { id, user_id } = req.body;
+
+  try {
+    await bot.telegram.sendMessage(
+      user_id,
+      `🎬 *All clips collected!*\n\nRendering your video now...\n\n⏳ This may take a few minutes.`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    console.error(`Failed to notify clips complete:`, err.message);
+  }
+});
+
 // ── Segment upload request ────────────────────────────────────────
 app.post('/notify/segment-upload-request', async (req, res) => {
   try {
