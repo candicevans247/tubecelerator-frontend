@@ -3396,89 +3396,99 @@ if (state?.uploadingClipVideo) {
 
   // ── Priority 4: USER uploading their own video for a segment ────
   // This is the NEW path - triggered by upload_video_ callback
-  if (state?.uploadingSegmentVideo) {
-    const { jobId, segmentIndex } = state.uploadingSegmentVideo;
+  // ── Priority 4: USER uploading their own video for a segment ────
+if (state?.uploadingSegmentVideo) {
+  const { jobId, segmentIndex } = state.uploadingSegmentVideo;
 
-    try {
-      // Validate job still exists
-      const jobInfo = await getJobInfo(jobId);
-      if (!jobInfo) {
-        return ctx.reply('❌ Job not found. Please restart with /start');
-      }
+  try {
+    const jobInfo = await getJobInfo(jobId);
+    if (!jobInfo) {
+      return ctx.reply('❌ Job not found. Please restart with /start');
+    }
 
-      const video = ctx.message.video;
+    const video = ctx.message.video;
 
-      // Size check — Telegram bot API limit for uploads
-      if (video.file_size && video.file_size > 100 * 1024 * 1024) {
-        return ctx.reply(
-          '❌ Video too large. Maximum size is 100MB.\n\n' +
-          'Please compress your video and try again.'
-        );
-      }
-
-      await ctx.reply('📥 Uploading your video clip...');
-
-      // Download from Telegram
-      const fileInfo = await ctx.telegram.getFile(video.file_id);
-      const fileUrl = getTelegramFileUrl(fileInfo.file_path);
-
-      const response = await axios.get(fileUrl, { 
-        responseType: 'arraybuffer', 
-        timeout: 120000  // Videos can be large - give more time
-      });
-
-      const fileBuffer = Buffer.from(response.data);
-
-      // Determine extension from file path
-      const ext      = fileInfo.file_path.split('.').pop() || 'mp4';
-      const fileName = `jobs/${jobId}/user-videos/segment-${segmentIndex}.${ext}`;
-
-      // Upload to R2
-      const uploadedUrl = await uploadFile(fileName, fileBuffer, `video/${ext}`);
-
-      // Tell worker about it - uses new /upload-segment-video endpoint
-      const updateResponse = await axios.post(
-        `${WORKER_BASE_URL}/upload-segment-video`,
-        {
-          jobId,
-          segmentIndex,
-          videoUrl:     uploadedUrl,
-          fileName,
-          videoDuration: video.duration || 5,  // Telegram provides duration
-          source:       'user_upload'
-        }
-      );
-
-      if (updateResponse.data.success) {
-        // Wake worker to continue pipeline
-        await axios.post(`${WORKER_BASE_URL}/wake-up`, {
-          jobId,
-          action:       'user_video_uploaded',
-          segmentIndex,
-          timestamp:    Date.now()
-        });
-
-        // Clear the upload state
-        delete state.uploadingSegmentVideo;
-        userStates.set(ctx.chat.id, state);
-
-        return ctx.reply(
-          `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
-          `Moving to next segment...`,
-          { parse_mode: 'Markdown' }
-        );
-      } else {
-        throw new Error(updateResponse.data.error || 'Failed to update segment');
-      }
-
-    } catch (error) {
-      console.error('Error uploading user segment video:', error);
+    if (video.file_size && video.file_size > 100 * 1024 * 1024) {
       return ctx.reply(
-        '❌ Failed to upload video. Please try again.\n\n' +
-        'If the problem persists, use /support'
+        '❌ Video too large. Maximum size is 100MB.\n\n' +
+        'Please compress your video and try again.'
       );
     }
+
+    await ctx.reply(
+      '📥 Uploading and trimming your video clip...\n\n' +
+      '✂️ _Clip will be trimmed to ≤3s for fair use compliance_',
+      { parse_mode: 'Markdown' }
+    );
+
+    // Download from Telegram
+    const fileInfo = await ctx.telegram.getFile(video.file_id);
+    const fileUrl  = getTelegramFileUrl(fileInfo.file_path);
+
+    const response = await axios.get(fileUrl, {
+      responseType: 'arraybuffer',
+      timeout:      120000
+    });
+
+    const fileBuffer = Buffer.from(response.data);
+    const ext        = fileInfo.file_path.split('.').pop() || 'mp4';
+    const fileName   = `jobs/${jobId}/user-videos/segment-${segmentIndex}.${ext}`;
+
+    // Upload raw to R2 first — worker will trim it
+    const uploadedUrl = await uploadFile(fileName, fileBuffer, `video/${ext}`);
+
+    // Tell worker — trimming now happens inside /upload-segment-video
+    const updateResponse = await axios.post(
+      `${WORKER_BASE_URL}/upload-segment-video`,
+      {
+        jobId,
+        segmentIndex,
+        videoUrl:      uploadedUrl,
+        fileName,
+        videoDuration: video.duration || 5,
+        source:        'user_upload'
+      }
+    );
+
+    if (updateResponse.data.success) {
+      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+        jobId,
+        action:       'user_video_uploaded',
+        segmentIndex,
+        timestamp:    Date.now()
+      });
+
+      // Clear upload state
+      delete state.uploadingSegmentVideo;
+      userStates.set(ctx.chat.id, state);
+
+      // ── Show trim result to user ──────────────────────────────────
+      const trimmedDuration    = updateResponse.data.trimmedDuration    || 3;
+      const originalDuration   = updateResponse.data.originalDuration   || video.duration || 5;
+      const wasActuallyTrimmed = originalDuration > trimmedDuration;
+
+      const trimNote = wasActuallyTrimmed
+        ? `✂️ Trimmed: ${originalDuration.toFixed(1)}s → ${trimmedDuration.toFixed(2)}s _(fair use)_`
+        : `✅ Duration: ${trimmedDuration.toFixed(2)}s _(within fair use limit)_`;
+
+      return ctx.reply(
+        `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
+        `${trimNote}\n\n` +
+        `Moving to next segment...`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      throw new Error(updateResponse.data.error || 'Failed to update segment');
+    }
+
+  } catch (error) {
+    console.error('Error uploading user segment video:', error);
+    return ctx.reply(
+      '❌ Failed to upload video. Please try again.\n\n' +
+      'If the problem persists, use /support'
+    );
   }
+}
 
   // ── Priority 5: Support mode ─────────────────────────────────────
   const session = await getUserSession(ctx.chat.id);
