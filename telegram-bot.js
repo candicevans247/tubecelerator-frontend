@@ -3598,48 +3598,22 @@ if (updateResponse.data.success) {
   delete state.uploadingSegmentVideo;
   userStates.set(ctx.chat.id, state);
 
-  const trimmedDuration  = updateResponse.data.trimmedDuration  || 3;
-  const originalDuration = updateResponse.data.originalDuration || video.duration || 5;
-  const remaining        = updateResponse.data.remaining        || 0;
-  const tooSmallToFill   = updateResponse.data.tooSmallToFill   || false;
+  const trimmedDuration    = updateResponse.data.trimmedDuration    || 3;
+  const originalDuration   = updateResponse.data.originalDuration   || video.duration || 5;
   const wasActuallyTrimmed = originalDuration > trimmedDuration;
 
   const trimNote = wasActuallyTrimmed
     ? `✂️ Trimmed: ${originalDuration.toFixed(1)}s → ${trimmedDuration.toFixed(2)}s _(fair use)_`
     : `✅ Duration: ${trimmedDuration.toFixed(2)}s _(within fair use limit)_`;
 
-  // ── Remaining too small — offer reverse fill ──────────────────
-  if (tooSmallToFill) {
-    return ctx.reply(
-      `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
-      `${trimNote}\n\n` +
-      `⏱ *Remaining:* ${remaining.toFixed(2)}s\n\n` +
-      `The remaining duration is too short for a new clip.\n` +
-      `Choose how to fill it:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[
-            {
-              text:          '🔁 Fill with Reverse/Rewind',
-              callback_data: `reverse_fill_${jobId}_${segmentIndex}`
-            },
-            {
-              text:          '📸 Upload Image Anyway',
-              callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
-            }
-          ]]
-        }
-      }
-    );
-  }
-
-  // ── Normal — enough remaining for image fill ──────────────────
+  // ── Always show neutral message — worker decides what comes next ──
+  // Worker will send either:
+  //   - reverse fill prompt (if remaining < MIN_FILL_DURATION)
+  //   - image review (if remaining >= MIN_FILL_DURATION)
   return ctx.reply(
     `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
     `${trimNote}\n\n` +
-    `🖼️ Fetching an image to fill the remaining ${remaining.toFixed(1)}s...\n` +
-    `⏳ You'll be asked to review it shortly.`,
+    `⏳ Processing...`,
     { parse_mode: 'Markdown' }
   );
 } else {
