@@ -858,6 +858,48 @@ if (targetDuration !== undefined) {
   }
 }
 
+async function notifyReverseFillPrompt({
+  id, user_id, segmentIndex, totalSegments,
+  segmentText, filledDuration, targetDuration, remaining
+}) {
+  try {
+    const pct    = Math.min(100, Math.round((filledDuration / targetDuration) * 100));
+    const blocks = Math.round(pct / 10);
+    const bar    = '█'.repeat(blocks) + '░'.repeat(10 - blocks);
+
+    await bot.telegram.sendMessage(
+      user_id,
+      `⏱ *Segment ${segmentIndex + 1}/${totalSegments} — Almost Full!*\n\n` +
+      `📝 _${segmentText.substring(0, 150)}${segmentText.length > 150 ? '...' : ''}_\n\n` +
+      `${bar} ${pct}%\n` +
+      `🎬 Video clips: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+      `⚠️ Only *${remaining.toFixed(2)}s* remaining — too short for a new clip.\n\n` +
+      `Choose how to fill the gap:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            {
+              text:          '🔁 Fill with Reverse/Rewind',
+              callback_data: `reverse_fill_${id}_${segmentIndex}`
+            },
+            {
+              text:          '📸 Upload Image Anyway',
+              callback_data: `upload_clip_image_${id}_${segmentIndex}`
+            }
+          ]]
+        }
+      }
+    );
+  } catch (error) {
+    console.error(
+      `❌ Failed to send reverse fill prompt for segment ${segmentIndex + 1}:`,
+      error.message
+    );
+    throw error;
+  }
+}
+
 async function notifySegmentUploadRequest({ 
   id, user_id, segmentIndex, totalSegments, 
   segmentText, query, mediaType = 'image',
