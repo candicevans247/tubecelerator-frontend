@@ -3451,33 +3451,32 @@ if (state?.uploadingSegmentVideo) {
     );
 
     if (updateResponse.data.success) {
-      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
-        jobId,
-        action:       'user_video_uploaded',
-        segmentIndex,
-        timestamp:    Date.now()
-      });
+  await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+    jobId,
+    action:       'user_video_uploaded',
+    segmentIndex,
+    timestamp:    Date.now()
+  });
 
-      // Clear upload state
-      delete state.uploadingSegmentVideo;
-      userStates.set(ctx.chat.id, state);
+  delete state.uploadingSegmentVideo;
+  userStates.set(ctx.chat.id, state);
 
-      // ── Show trim result to user ──────────────────────────────────
-      const trimmedDuration    = updateResponse.data.trimmedDuration    || 3;
-      const originalDuration   = updateResponse.data.originalDuration   || video.duration || 5;
-      const wasActuallyTrimmed = originalDuration > trimmedDuration;
+  const trimmedDuration  = updateResponse.data.trimmedDuration  || 3;
+  const originalDuration = updateResponse.data.originalDuration || video.duration || 5;
+  const wasActuallyTrimmed = originalDuration > trimmedDuration;
 
-      const trimNote = wasActuallyTrimmed
-        ? `✂️ Trimmed: ${originalDuration.toFixed(1)}s → ${trimmedDuration.toFixed(2)}s _(fair use)_`
-        : `✅ Duration: ${trimmedDuration.toFixed(2)}s _(within fair use limit)_`;
+  const trimNote = wasActuallyTrimmed
+    ? `✂️ Trimmed: ${originalDuration.toFixed(1)}s → ${trimmedDuration.toFixed(2)}s _(fair use)_`
+    : `✅ Duration: ${trimmedDuration.toFixed(2)}s _(within fair use limit)_`;
 
-      return ctx.reply(
-        `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
-        `${trimNote}\n\n` +
-        `Moving to next segment...`,
-        { parse_mode: 'Markdown' }
-      );
-    } else {
+  return ctx.reply(
+    `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
+    `${trimNote}\n\n` +
+    `🖼️ Fetching an image to fill the remaining duration...\n` +
+    `⏳ Next segment coming up shortly.`,
+    { parse_mode: 'Markdown' }
+  );
+} else {
       throw new Error(updateResponse.data.error || 'Failed to update segment');
     }
 
