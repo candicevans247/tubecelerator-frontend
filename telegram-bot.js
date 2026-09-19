@@ -4600,7 +4600,7 @@ checkStorageHealth().then(healthy => {
 module.exports = {
   bot,
   notifyScriptForReview,
-  notifySegmentsReady, 
+  notifySegmentsReady,
   notifySegmentImageForReview,
   notifySegmentUploadRequest,
   notifyAllImagesComplete,
@@ -4608,5 +4608,6 @@ module.exports = {
   notifyAllVideosComplete,
   notifyAudioForReview,
   notifyVideoComplete,
-  notifySegmentClipRequest    
+  notifySegmentClipRequest,
+  notifyReverseFillPrompt     
 };
