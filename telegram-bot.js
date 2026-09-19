@@ -752,7 +752,12 @@ async function notifyScriptForReview({ id, user_id, script }) {
 
 async function notifySegmentImageForReview({ 
   id, user_id, segmentIndex, totalSegments, 
-  segmentText, imageUrl, query 
+  segmentText, imageUrl, query,
+  isReserved,
+  // ── Optional duration context (when filling after video clip) ──
+  filledDuration,
+  targetDuration,
+  imageFillDuration
 }) {
   try {
     console.log(`📤 Sending image for segment ${segmentIndex + 1} to user ${user_id}`);
@@ -765,7 +770,6 @@ async function notifySegmentImageForReview({
 
     let imageBuffer = Buffer.from(response.data);
 
-    // ── Resize if dimensions exceed Telegram's limit ──────────────
     try {
       const sharp    = require('sharp');
       const metadata = await sharp(imageBuffer).metadata();
@@ -777,9 +781,6 @@ async function notifySegmentImageForReview({
         height > 4500;
 
       if (needsResize) {
-        console.log(
-          `  📐 Resizing image (${width}x${height}) — exceeds Telegram limits`
-        );
         imageBuffer = await sharp(imageBuffer)
           .resize(1280, 1280, {
             fit: 'inside',
@@ -787,12 +788,17 @@ async function notifySegmentImageForReview({
           })
           .jpeg({ quality: 85 })
           .toBuffer();
-
-        console.log(`  ✅ Resized to fit within 1280x1280`);
       }
     } catch (resizeErr) {
       console.warn(`  ⚠️ Could not resize image: ${resizeErr.message} — sending as-is`);
     }
+
+    // ── Build duration line if context provided ───────────────────
+    const durationLine = (filledDuration !== undefined && targetDuration !== undefined)
+      ? `\n\n⏱ *Segment fill:* ${filledDuration.toFixed(1)}s video + ` +
+        `${(imageFillDuration || 0).toFixed(1)}s image = ` +
+        `${targetDuration.toFixed(1)}s total`
+      : '';
 
     await bot.telegram.sendPhoto(
       user_id,
@@ -801,8 +807,9 @@ async function notifySegmentImageForReview({
         caption:
           `🖼️ *Image for Segment ${segmentIndex + 1}/${totalSegments}*\n\n` +
           `📝 *Text:* ${segmentText.substring(0, 150)}` +
-          `${segmentText.length > 150 ? '...' : ''}\n\n` +
-          `❓ Is this image relevant to this part of your script?`,
+          `${segmentText.length > 150 ? '...' : ''}` +
+          durationLine +
+          `\n\n❓ Is this image relevant to this part of your script?`,
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
