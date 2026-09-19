@@ -198,16 +198,24 @@ app.post('/notify/segment-image-review', async (req, res) => {
     const { 
       id, user_id, segmentIndex, 
       totalSegments, segmentText, 
-      imageUrl, query 
+      imageUrl, query,
+      isReserved,
+      filledDuration,
+      targetDuration,
+      imageFillDuration
     } = req.body;
 
     await notifySegmentImageForReview({ 
       id, user_id, segmentIndex, 
       totalSegments, segmentText, 
-      imageUrl, query 
+      imageUrl, query,
+      isReserved,
+      filledDuration,
+      targetDuration,
+      imageFillDuration
     });
 
-    res.json({ success: true, message: 'Segment image review notification sent' });
+    res.json({ success: true });
   } catch (error) {
     console.error('Segment image review notification error:', error);
     res.status(500).json({ success: false, error: error.message });
