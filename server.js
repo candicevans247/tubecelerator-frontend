@@ -236,6 +236,35 @@ app.post('/notify/segments-ready', async (req, res) => {
   }
 });
 
+app.post('/notify/segment-image-review', async (req, res) => {
+  try {
+    const { 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, 
+      imageUrl, query,
+      isReserved,
+      filledDuration,
+      targetDuration,
+      imageFillDuration
+    } = req.body;
+
+    await notifySegmentImageForReview({ 
+      id, user_id, segmentIndex, 
+      totalSegments, segmentText, 
+      imageUrl, query,
+      isReserved,
+      filledDuration,
+      targetDuration,
+      imageFillDuration
+    });
+
+    res.json({ success: true, message: 'Segment image review notification sent' });
+  } catch (error) {
+    console.error('Segment image review notification error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.post('/notify/clip-collection-started', async (req, res) => {
   res.json({ success: true });
   const { id, user_id, mediaMode, mediaType } = req.body;
