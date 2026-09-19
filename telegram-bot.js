@@ -2616,6 +2616,46 @@ bot.on('callback_query', async (ctx) => {
   console.log('Callback:', callbackData, '| User:', ctx.from.id);
 
   try {
+    // ── Reverse fill segment ──────────────────────────────────────────
+if (callbackData.startsWith('reverse_fill_')) {
+  const parts        = callbackData.split('_');
+  // format: reverse_fill_{jobId}_{segmentIndex}
+  const jobId        = parts[2];
+  const segmentIndex = parseInt(parts[3]);
+
+  try {
+    await ctx.answerCbQuery('Applying reverse fill... 🔁');
+
+    const response = await axios.post(
+      `${WORKER_BASE_URL}/reverse-fill-segment`,
+      { jobId: parseInt(jobId), segmentIndex }
+    );
+
+    if (response.data.success) {
+      await wakeWorker(jobId, 'reverse_fill_applied');
+
+      try {
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+      } catch (_) {}
+
+      await ctx.reply(
+        `🔁 *Reverse fill applied for Segment ${segmentIndex + 1}!*\n\n` +
+        `The existing clips will loop in reverse to fill the ` +
+        `remaining *${response.data.reverseFillDuration.toFixed(2)}s*.\n\n` +
+        `Moving to next segment...`,
+        { parse_mode: 'Markdown' }
+      );
+
+    } else {
+      await ctx.reply('❌ Failed to apply reverse fill. Please try again.');
+    }
+
+  } catch (err) {
+    console.error('Reverse fill error:', err.message);
+    await ctx.reply('❌ Error applying reverse fill. Please try again.');
+  }
+  return;
+}
     // ── Upload video clip (manual clip-filling mode) ──────────────────
 if (callbackData.startsWith('upload_clip_video_')) {
   const parts        = callbackData.split('_');
@@ -3379,45 +3419,69 @@ if (state?.uploadingClipVideo) {
     const bar      = '█'.repeat(filled) + '░'.repeat(empty);
 
     if (isComplete) {
-      // Segment filled — wake worker for next segment
-      await axios.post(`${WORKER_BASE_URL}/wake-up`, {
-        jobId,
-        action:    'clip_video_uploaded',
-        timestamp: Date.now()
-      });
+  await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+    jobId, action: 'clip_video_uploaded', timestamp: Date.now()
+  });
 
-      return ctx.reply(
-        `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
-        `${bar} ${pct}%\n` +
-        `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n\n` +
-        `✅ *Segment complete!* Moving to next...`,
-        { parse_mode: 'Markdown' }
-      );
-    } else {
-      // More clips needed — prompt user
-      return ctx.reply(
-        `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
-        `${bar} ${pct}%\n` +
-        `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
-        `Remaining: *${remaining.toFixed(1)}s*\n\n` +
-        `Upload another clip or image to fill the remaining time:`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              {
-                text:          '🎬 Upload Video Clip',
-                callback_data: `upload_clip_video_${jobId}_${segmentIndex}`
-              },
-              {
-                text:          '🖼️ Upload Image',
-                callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
-              }
-            ]]
+  return ctx.reply(
+    `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
+    `${bar} ${pct}%\n` +
+    `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n\n` +
+    `✅ *Segment complete!* Moving to next...`,
+    { parse_mode: 'Markdown' }
+  );
+
+} else if (tooSmallToFill) {
+  // ── Remaining too small — offer reverse fill ────────────────
+  return ctx.reply(
+    `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
+    `${bar} ${pct}%\n` +
+    `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+    `Remaining: *${remaining.toFixed(2)}s*\n\n` +
+    `The remaining duration is too short for a new clip.\n` +
+    `Choose how to fill it:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          {
+            text:          '🔁 Fill with Reverse/Rewind',
+            callback_data: `reverse_fill_${jobId}_${segmentIndex}`
+          },
+          {
+            text:          '📸 Upload Image Anyway',
+            callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
           }
-        }
-      );
+        ]]
+      }
     }
+  );
+
+} else {
+  // More clips needed
+  return ctx.reply(
+    `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n` +
+    `${bar} ${pct}%\n` +
+    `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+    `Remaining: *${remaining.toFixed(1)}s*\n\n` +
+    `Upload another clip or image to fill the remaining time:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[
+          {
+            text:          '🎬 Upload Video Clip',
+            callback_data: `upload_clip_video_${jobId}_${segmentIndex}`
+          },
+          {
+            text:          '🖼️ Upload Image',
+            callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
+          }
+        ]]
+      }
+    }
+  );
+}
 
   } catch (error) {
     console.error('Error uploading clip video:', error);
@@ -3481,7 +3545,7 @@ if (state?.uploadingSegmentVideo) {
       }
     );
 
-    if (updateResponse.data.success) {
+if (updateResponse.data.success) {
   await axios.post(`${WORKER_BASE_URL}/wake-up`, {
     jobId,
     action:       'user_video_uploaded',
@@ -3494,20 +3558,48 @@ if (state?.uploadingSegmentVideo) {
 
   const trimmedDuration  = updateResponse.data.trimmedDuration  || 3;
   const originalDuration = updateResponse.data.originalDuration || video.duration || 5;
+  const remaining        = updateResponse.data.remaining        || 0;
+  const tooSmallToFill   = updateResponse.data.tooSmallToFill   || false;
   const wasActuallyTrimmed = originalDuration > trimmedDuration;
 
   const trimNote = wasActuallyTrimmed
     ? `✂️ Trimmed: ${originalDuration.toFixed(1)}s → ${trimmedDuration.toFixed(2)}s _(fair use)_`
     : `✅ Duration: ${trimmedDuration.toFixed(2)}s _(within fair use limit)_`;
 
+  // ── Remaining too small — offer reverse fill ──────────────────
+  if (tooSmallToFill) {
+    return ctx.reply(
+      `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
+      `${trimNote}\n\n` +
+      `⏱ *Remaining:* ${remaining.toFixed(2)}s\n\n` +
+      `The remaining duration is too short for a new clip.\n` +
+      `Choose how to fill it:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            {
+              text:          '🔁 Fill with Reverse/Rewind',
+              callback_data: `reverse_fill_${jobId}_${segmentIndex}`
+            },
+            {
+              text:          '📸 Upload Image Anyway',
+              callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
+            }
+          ]]
+        }
+      }
+    );
+  }
+
+  // ── Normal — enough remaining for image fill ──────────────────
   return ctx.reply(
-  `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
-  `${trimNote}\n\n` +
-  `🖼️ Fetching an image to fill the remaining ` +
-  `${(originalDuration - trimmedDuration).toFixed(1)}s...\n` +
-  `⏳ You'll be asked to review it shortly.`,  // ← "shortly" not "next segment"
-  { parse_mode: 'Markdown' }
-);
+    `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
+    `${trimNote}\n\n` +
+    `🖼️ Fetching an image to fill the remaining ${remaining.toFixed(1)}s...\n` +
+    `⏳ You'll be asked to review it shortly.`,
+    { parse_mode: 'Markdown' }
+  );
 } else {
       throw new Error(updateResponse.data.error || 'Failed to update segment');
     }
