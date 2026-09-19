@@ -3477,12 +3477,13 @@ if (state?.uploadingSegmentVideo) {
     : `✅ Duration: ${trimmedDuration.toFixed(2)}s _(within fair use limit)_`;
 
   return ctx.reply(
-    `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
-    `${trimNote}\n\n` +
-    `🖼️ Fetching an image to fill the remaining duration...\n` +
-    `⏳ Next segment coming up shortly.`,
-    { parse_mode: 'Markdown' }
-  );
+  `✅ *Video uploaded for Segment ${segmentIndex + 1}!*\n\n` +
+  `${trimNote}\n\n` +
+  `🖼️ Fetching an image to fill the remaining ` +
+  `${(originalDuration - trimmedDuration).toFixed(1)}s...\n` +
+  `⏳ You'll be asked to review it shortly.`,  // ← "shortly" not "next segment"
+  { parse_mode: 'Markdown' }
+);
 } else {
       throw new Error(updateResponse.data.error || 'Failed to update segment');
     }
