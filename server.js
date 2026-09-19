@@ -177,7 +177,8 @@ const {
   notifyAllVideosComplete,       
   notifyAudioForReview, 
   notifyVideoComplete,
-  notifySegmentClipRequest    
+  notifySegmentClipRequest,
+  notifyReverseFillPrompt        // ← add this
 } = require('./telegram-bot');
 
 // ── Script review ─────────────────────────────────────────────────
@@ -219,6 +220,24 @@ app.post('/notify/segment-image-review', async (req, res) => {
   } catch (error) {
     console.error('Segment image review notification error:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/notify/reverse-fill-prompt', async (req, res) => {
+  res.json({ success: true });
+
+  const {
+    id, user_id, segmentIndex, totalSegments,
+    segmentText, filledDuration, targetDuration, remaining
+  } = req.body;
+
+  try {
+    await notifyReverseFillPrompt({
+      id, user_id, segmentIndex, totalSegments,
+      segmentText, filledDuration, targetDuration, remaining
+    });
+  } catch (err) {
+    console.error('reverse-fill-prompt notification failed:', err.message);
   }
 });
 
