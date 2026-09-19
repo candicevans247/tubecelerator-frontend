@@ -793,12 +793,36 @@ async function notifySegmentImageForReview({
       console.warn(`  ⚠️ Could not resize image: ${resizeErr.message} — sending as-is`);
     }
 
-    // ── Build duration line if context provided ───────────────────
-    const durationLine = (filledDuration !== undefined && targetDuration !== undefined)
-      ? `\n\n⏱ *Segment fill:* ${filledDuration.toFixed(1)}s video + ` +
-        `${(imageFillDuration || 0).toFixed(1)}s image = ` +
-        `${targetDuration.toFixed(1)}s total`
-      : '';
+    // ── Build duration line ───────────────────────────────────────
+let durationLine = '';
+
+if (targetDuration !== undefined) {
+  const filled = filledDuration || 0;
+  const fill   = imageFillDuration || targetDuration;
+
+  if (filled > 0) {
+    // Has video clips already — showing fill image
+    const pct      = Math.min(100, Math.round(((filled + fill) / targetDuration) * 100));
+    const blocks   = Math.round(pct / 10);
+    const bar      = '█'.repeat(blocks) + '░'.repeat(10 - blocks);
+
+    durationLine =
+      `\n\n⏱ *Segment ${filled > 0 ? 'fill' : 'duration'}:*\n` +
+      `${bar} ${pct}%\n` +
+      `🎬 Video clip: *${filled.toFixed(1)}s*\n` +
+      `🖼️ This image fills: *${fill.toFixed(1)}s*\n` +
+      `📊 Total: *${(filled + fill).toFixed(1)}s* / *${targetDuration.toFixed(1)}s*`;
+  } else {
+    // Pure image segment — no video clips
+    const pct    = 100;
+    const bar    = '█'.repeat(10);
+
+    durationLine =
+      `\n\n⏱ *Segment duration:*\n` +
+      `${bar} ${pct}%\n` +
+      `🖼️ This image fills: *${fill.toFixed(1)}s*`;
+  }
+}
 
     await bot.telegram.sendPhoto(
       user_id,
