@@ -1667,11 +1667,14 @@ bot.command('setstatus', async (ctx) => {
   const jobId     = parseInt(parts[1]);
   const newStatus = parts[2];
 
-  const validStatuses = [
-    'pending', 'text_approved', 'segments_ready',
-    'image_segment_approved', 'video_segment_approved',
-    'images_approved', 'videos_approved', 'audio_approved', 'captions_ready'
-  ];
+const validStatuses = [
+  'pending', 'text_approved', 'segments_ready',
+  'image_segment_approved', 'video_segment_approved',
+  'images_approved', 'videos_approved', 'audio_approved', 
+  'captions_ready',
+  'clips_ready',      
+  'clip_filling'      
+];
 
   if (isNaN(jobId))                       return ctx.reply('❌ Invalid job ID.');
   if (!validStatuses.includes(newStatus)) return ctx.reply(`❌ Invalid status.`);
