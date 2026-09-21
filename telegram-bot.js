@@ -878,16 +878,24 @@ async function notifyReverseFillPrompt({
       {
         parse_mode: 'Markdown',
         reply_markup: {
-          inline_keyboard: [[
-            {
-              text:          '🔁 Fill with Reverse/Rewind',
-              callback_data: `reverse_fill_${id}_${segmentIndex}`
-            },
-            {
-              text:          '📸 Upload Image Anyway',
-              callback_data: `upload_clip_image_${id}_${segmentIndex}`
-            }
-          ]]
+          inline_keyboard: [
+            [
+              {
+                text:          '🔁 Fill with Reverse/Rewind',
+                callback_data: `reverse_fill_${id}_${segmentIndex}`
+              },
+              {
+                text:          '📸 Upload Image',
+                callback_data: `upload_clip_image_${id}_${segmentIndex}`
+              }
+            ],
+            [
+              {
+                text:          '🎬 Upload Another Clip',
+                callback_data: `upload_clip_video_${id}_${segmentIndex}`
+              }
+            ]
+          ]
         }
       }
     );
