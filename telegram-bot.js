@@ -2458,7 +2458,7 @@ bot.command('resetsegment', async (ctx) => {
 
     // ── Determine what status to roll back to ────────────────────────
     // Rolling back to segments_ready means worker will re-fetch media
-    const rollbackStatus = 'segments_ready';
+    const rollbackStatus = 'clip_filling';
 
     await pool.query(
       `UPDATE jobs
