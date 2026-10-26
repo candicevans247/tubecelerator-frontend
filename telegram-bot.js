@@ -3529,12 +3529,13 @@ if (state?.uploadingClipVideo) {
     }
 
     const {
-      filledDuration,
-      targetDuration,
-      isComplete,
-      remaining,
-      clipDuration
-    } = updateResponse.data;
+  filledDuration,
+  targetDuration,
+  isComplete,
+  remaining,
+  clipDuration,
+  tooSmallToFill
+} = updateResponse.data;
 
     // Clear upload state
     delete state.uploadingClipVideo;
