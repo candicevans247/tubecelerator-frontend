@@ -410,7 +410,7 @@ function setupTrendBot(bot, userStates) {
       // Return early — don't fall through to "serve from cache" since it's not ready
       return;
     }
-    }
+    
 
     // ── Serve from cache ──────────────────────────────────────────
     const results = await getCachedTrending(subniche_id, 20);
