@@ -100,16 +100,24 @@ async function initTrendTables() {
 // Subniche CRUD
 // ─────────────────────────────────────────────
 
-async function createSubniche({ name, description, content_type, created_by }) {
+async function createSubniche({ name, description, content_type, content_flow, created_by }) {
   const { rows } = await pool.query(
     `INSERT INTO trend_subniches
-       (name, description, content_type, created_by, is_public)
-     VALUES ($1, $2, $3, $4, TRUE)
+       (name, description, content_type, content_flow, created_by, is_public)
+     VALUES ($1, $2, $3, $4, $5, TRUE)
      RETURNING *`,
-    [name, description || null, content_type || 'videos', created_by || null]
+    [name, description || null, content_type || 'videos', content_flow || null, created_by || null]
   );
   return rows[0];
 }
+
+async function updateSubnicheContentFlow(id, content_flow) {
+  await pool.query(
+    `UPDATE trend_subniches SET content_flow = $1, updated_at = NOW() WHERE id = $2`,
+    [content_flow, id]
+  );
+}
+
 
 async function getSubnicheById(id) {
   const { rows } = await pool.query(
