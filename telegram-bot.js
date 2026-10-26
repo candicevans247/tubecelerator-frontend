@@ -9,7 +9,9 @@ const { uploadFile, deleteFile, getFileUrl } = require('./storage');
 const { setupTrendBot, initTrendTables } = require('./trend-bot');
 
 // Main bot — official API — handles ALL updates and file downloads
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+  handlerTimeout: 9_000_000 // ~2.5 hours — prevents Telegraf from force-killing slow handlers
+});
 
 // Separate client — local API — ONLY for sending large files out
 const { Telegram } = require('telegraf');
