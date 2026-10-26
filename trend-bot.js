@@ -2,6 +2,12 @@
 const { Markup } = require('telegraf');
 const axios = require('axios');
 
+const CONTENT_FLOW_OPTIONS = [
+  { text: '👑 Celebrity News',                data: 'celebrity-news' },
+  { text: '🔟 Top 10 Videos',                 data: 'top-10' },
+  { text: '💔 Celeb Relationship Breakdowns', data: 'celeb-relationship-breakdown' },
+];
+
 const {
   initTrendTables,
   createSubniche,
@@ -596,11 +602,12 @@ if (item.thumbnail) {
 
     const userData = userStates.get(chatId) || {};
     userData.topLevelFlow = 'video';
-    userData.trendSeed    = {
+      userData.trendSeed    = {
       title:       item.title,
       video_id:    item.video_id,
       channel:     item.channel_name,
       viral_score: item.viral_score,
+      subniche_id: subniche_id, // ← add this
     };
     userStates.set(chatId, userData);
 
@@ -636,6 +643,7 @@ if (item.thumbnail) {
   });
 
   // ── Use trending topic as prompt ────────────────────────────────
+  // ── Use trending topic as prompt ────────────────────────────────
   bot.action(/^trend_use_prompt_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const chatId   = ctx.from.id;
@@ -647,8 +655,64 @@ if (item.thumbnail) {
 
     userData.mode      = 'prompt';
     userData.inputText = `Create a video about: "${userData.trendSeed.title}"`;
-    userStates.set(chatId, userData);
 
+    const subniche = await getSubnicheById(userData.trendSeed.subniche_id);
+
+    if (subniche && subniche.content_flow) {
+      // Auto-route — subniche already knows its flow, skip the picker entirely
+      userData.content_flow = subniche.content_flow;
+      userStates.set(chatId, userData);
+
+      const flowLabel =
+        subniche.content_flow === 'celebrity-news'                 ? '👑 Celebrity News' :
+        subniche.content_flow === 'top-10'                         ? '🔟 Top 10 Videos'  :
+        subniche.content_flow === 'celeb-relationship-breakdown'   ? '💔 Celeb Relationship Breakdowns' :
+        subniche.content_flow;
+
+      try {
+        await ctx.editMessageText(
+          `✅ *${flowLabel} selected\\!*\n\n` +
+          `Topic: _"${userData.trendSeed.title.replace(/[_*[\]()~\`>#+\-=|{}.!\\]/g, '\\$&')}"_\n\n` +
+          `How long should the video be?`,
+          {
+            parse_mode:   'MarkdownV2',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '1 min', callback_data: 'trend_duration_1' },
+                  { text: '2 min', callback_data: 'trend_duration_2' },
+                  { text: '3 min', callback_data: 'trend_duration_3' },
+                ],
+                [
+                  { text: '4 min', callback_data: 'trend_duration_4' },
+                  { text: '5 min', callback_data: 'trend_duration_5' },
+                ]
+              ]
+            }
+          }
+        );
+      } catch (e) {
+        await ctx.reply(`✅ ${flowLabel} selected! How long should the video be?`, {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '1 min', callback_data: 'trend_duration_1' },
+                { text: '2 min', callback_data: 'trend_duration_2' },
+                { text: '3 min', callback_data: 'trend_duration_3' },
+              ],
+              [
+                { text: '4 min', callback_data: 'trend_duration_4' },
+                { text: '5 min', callback_data: 'trend_duration_5' },
+              ]
+            ]
+          }
+        });
+      }
+      return;
+    }
+
+    // Fallback — subniche has no content_flow assigned yet (legacy template)
+    userStates.set(chatId, userData);
     try {
       await ctx.editMessageText(
         `✅ *Topic set as prompt:*\n\n_"${userData.trendSeed.title}"_\n\n` +
@@ -657,35 +721,39 @@ if (item.thumbnail) {
           parse_mode:   'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '📰 Essay Styled Video', callback_data: 'trend_flow_news'     }],
-              [{ text: '📋 Listicle Video',      callback_data: 'trend_flow_listicle' }],
+              [{ text: '👑 Celebrity News',                callback_data: 'trend_flow_celebrity-news' }],
+              [{ text: '🔟 Top 10 Videos',                 callback_data: 'trend_flow_top-10' }],
+              [{ text: '💔 Celeb Relationship Breakdowns', callback_data: 'trend_flow_celeb-relationship-breakdown' }],
             ]
           }
         }
       );
     } catch (e) {
-      await ctx.reply(
-        `✅ Topic set. Choose your content flow:`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '📰 Essay Styled Video', callback_data: 'trend_flow_news'     }],
-              [{ text: '📋 Listicle Video',      callback_data: 'trend_flow_listicle' }],
-            ]
-          }
+      await ctx.reply(`✅ Topic set. Choose your content flow:`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '👑 Celebrity News',                callback_data: 'trend_flow_celebrity-news' }],
+            [{ text: '🔟 Top 10 Videos',                 callback_data: 'trend_flow_top-10' }],
+            [{ text: '💔 Celeb Relationship Breakdowns', callback_data: 'trend_flow_celeb-relationship-breakdown' }],
+          ]
         }
-      );
+      });
     }
   });
 
   // ── Use trending topic — user writes own script ─────────────────
-  bot.action(/^trend_use_script_(.+)$/, async (ctx) => {
+    bot.action(/^trend_use_script_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const chatId   = ctx.from.id;
     const userData = userStates.get(chatId) || {};
 
     if (!userData.trendSeed) {
       return ctx.answerCbQuery('Session expired. Please start again.', true);
+    }
+
+    const subniche = await getSubnicheById(userData.trendSeed.subniche_id);
+    if (subniche && subniche.content_flow) {
+      userData.content_flow = subniche.content_flow;
     }
 
     userData.mode                = 'script';
@@ -705,9 +773,9 @@ if (item.thumbnail) {
       Markup.keyboard([['❌ Cancel']]).oneTime().resize()
     );
   });
-
+  
   // ── Flow selection after prompt seeding ────────────────────────
-  bot.action(/^trend_flow_(news|listicle)$/, async (ctx) => {
+  bot.action(/^trend_flow_(celebrity-news|top-10|celeb-relationship-breakdown)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const chatId      = ctx.from.id;
     const userData    = userStates.get(chatId) || {};
@@ -718,8 +786,7 @@ if (item.thumbnail) {
 
     try {
       await ctx.editMessageText(
-        `✅ *${contentFlow === 'listicle' ? 'Listicle' : 'Essay Styled'} video selected\\!*\n\n` +
-        `How long should the video be?`,
+        `✅ Flow selected\\!\n\nHow long should the video be?`,
         {
           parse_mode:   'MarkdownV2',
           reply_markup: {
@@ -738,24 +805,21 @@ if (item.thumbnail) {
         }
       );
     } catch (e) {
-      await ctx.reply(
-        `How long should the video be?`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '1 min', callback_data: 'trend_duration_1' },
-                { text: '2 min', callback_data: 'trend_duration_2' },
-                { text: '3 min', callback_data: 'trend_duration_3' },
-              ],
-              [
-                { text: '4 min', callback_data: 'trend_duration_4' },
-                { text: '5 min', callback_data: 'trend_duration_5' },
-              ]
+      await ctx.reply(`How long should the video be?`, {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '1 min', callback_data: 'trend_duration_1' },
+              { text: '2 min', callback_data: 'trend_duration_2' },
+              { text: '3 min', callback_data: 'trend_duration_3' },
+            ],
+            [
+              { text: '4 min', callback_data: 'trend_duration_4' },
+              { text: '5 min', callback_data: 'trend_duration_5' },
             ]
-          }
+          ]
         }
-      );
+      });
     }
   });
 
@@ -808,7 +872,7 @@ if (item.thumbnail) {
   });
 
   // ── Content type selection ──────────────────────────────────────
-  bot.action(/^trend_type_(videos|shorts)$/, async (ctx) => {
+   bot.action(/^trend_type_(videos|shorts)$/, async (ctx) => {
     await ctx.answerCbQuery();
     const chatId    = ctx.from.id;
     const userData  = userStates.get(chatId) || {};
@@ -819,12 +883,54 @@ if (item.thumbnail) {
     }
 
     trendFlow.content_type = ctx.match[1];
-    trendFlow.step         = 'channels';
+    trendFlow.step         = 'content_flow'; // ← changed
     userStates.set(chatId, userData);
 
     try {
       await ctx.editMessageText(
         `✅ Tracking: *${trendFlow.content_type === 'shorts' ? '📱 Shorts' : '🎬 Longform Videos'}*\n\n` +
+        `Which content flow should this template generate videos with?`,
+        {
+          parse_mode:   'Markdown',
+          reply_markup: {
+            inline_keyboard: CONTENT_FLOW_OPTIONS.map(opt => ([
+              { text: opt.text, callback_data: `trend_cf_${opt.data}` }
+            ]))
+          }
+        }
+      );
+    } catch (e) {
+      await ctx.reply(
+        `✅ Which content flow should this template use?`,
+        {
+          reply_markup: {
+            inline_keyboard: CONTENT_FLOW_OPTIONS.map(opt => ([
+              { text: opt.text, callback_data: `trend_cf_${opt.data}` }
+            ]))
+          }
+        }
+      );
+    }
+  });
+
+    // ── Content flow selection during template creation ─────────────
+  bot.action(/^trend_cf_(celebrity-news|top-10|celeb-relationship-breakdown)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const chatId    = ctx.from.id;
+    const userData  = userStates.get(chatId) || {};
+    const trendFlow = userData.trendFlow;
+
+    if (!trendFlow || trendFlow.step !== 'content_flow') {
+      return ctx.answerCbQuery('Session expired', true);
+    }
+
+    trendFlow.content_flow = ctx.match[1];
+    trendFlow.step         = 'channels';
+    userStates.set(chatId, userData);
+
+    try {
+      await ctx.editMessageText(
+        `✅ Content flow set\\.\n\n` +
         `Now send me competitor channel URLs, one at a time\\.\n\n` +
         `*Accepted formats:*\n` +
         `• \`https://www\\.youtube\\.com/@ChannelName\`\n` +
@@ -853,7 +959,7 @@ if (item.thumbnail) {
       );
     }
   });
-
+  
   // ── Done button during channel collection ───────────────────────
   bot.action('trend_channels_done', async (ctx) => {
     await ctx.answerCbQuery();
@@ -991,9 +1097,10 @@ if (item.thumbnail) {
     }
 
     try {
-      const subniche = await createSubniche({
+            const subniche = await createSubniche({
         name:         trendFlow.name,
         content_type: trendFlow.content_type || 'videos',
+        content_flow: trendFlow.content_flow || null, // ← add this
         created_by:   chatId,
       });
 
