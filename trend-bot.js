@@ -12,6 +12,7 @@ const {
   isCachedToday,
   isFetchInProgress,
   getCachedTrending,
+  failFetchLog,        // ← add this
 } = require('./trend-db');
 
 const {
@@ -354,22 +355,33 @@ function setupTrendBot(bot, userStates) {
         return;
       }
 
-      // No cache — trigger fresh fetch
+          // No cache — trigger fresh fetch (fire-and-forget, don't block the handler)
       try {
         await ctx.editMessageText(
           `🔍 *Fetching trending videos for "${subniche.name}"\\.\\.\\.*\n\n` +
           `Scanning ${subniche.channel_count} competitor channel\\(s\\) for viral content ` +
-          `from the last 30 days\\. This takes about 30\\-60 seconds\\.`,
-          { parse_mode: 'MarkdownV2' }
+          `from the last 30 days\\. This usually takes 30\\-90 seconds\\.\n\n` +
+          `Tap *Check Again* in a moment to see results\\.`,
+          {
+            parse_mode: 'MarkdownV2',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '🔄 Check Again', callback_data: `trend_recheck_${subniche_id}` },
+                { text: '🔙 Back',        callback_data: 'trend_list_0' }
+              ]]
+            }
+          }
         );
       } catch (e) {}
 
-      try {
-        await fetchAndCacheTrending(subniche_id, chatId);
-      } catch (fetchErr) {
-        console.error(`❌ [trend-bot] Fetch failed for subniche ${subniche_id}:`, fetchErr.message);
+      // Fire-and-forget — NOT awaited. Lets the Telegraf handler return immediately,
+      // avoiding the 90s handlerTimeout. Fetch runs in background; cache gets
+      // populated when done; user polls via "Check Again".
+      fetchAndCacheTrending(subniche_id, chatId).catch(async (fetchErr) => {
+        console.error(`❌ [trend-bot] Background fetch failed for subniche ${subniche_id}:`, fetchErr.message);
 
-        // Refund credits since fetch failed
+        try { await failFetchLog(subniche_id, fetchErr.message); } catch (e) {}
+
         try {
           const { setCredits } = require('./credits');
           await setCredits(
@@ -384,24 +396,20 @@ function setupTrendBot(bot, userStates) {
         }
 
         try {
-          await ctx.editMessageText(
-            `❌ *Failed to fetch trending videos*\n\n` +
-            `Error: ${escapeMarkdown(fetchErr.message)}\n\n` +
-            `Your 5 credits have been refunded\\.\n\n` +
-            `Please try again or contact /support`,
-            {
-              parse_mode:   'MarkdownV2',
-              reply_markup: {
-                inline_keyboard: [[
-                  { text: '🔄 Try Again', callback_data: `trend_view_${subniche_id}_0` },
-                  { text: '🔙 Back',      callback_data: 'trend_list_0'                }
-                ]]
-              }
-            }
+          await bot.telegram.sendMessage(
+            chatId,
+            `❌ Failed to fetch trending videos for "${subniche.name}".\n\n` +
+            `Error: ${fetchErr.message}\n\n` +
+            `Your 5 credits have been refunded. Please try again or contact /support.`
           );
-        } catch (e) {}
-        return;
-      }
+        } catch (notifyErr) {
+          console.error(`❌ [trend-bot] Failed to notify user of fetch failure:`, notifyErr.message);
+        }
+      });
+
+      // Return early — don't fall through to "serve from cache" since it's not ready
+      return;
+    }
     }
 
     // ── Serve from cache ──────────────────────────────────────────
