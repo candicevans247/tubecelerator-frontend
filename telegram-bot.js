@@ -845,7 +845,7 @@ if (targetDuration !== undefined) {
             ],
             [
               { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
-              { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
+              { text: '🔗 Submit Link', callback_data: `upload_link_segment_${id}_${segmentIndex}` }
               { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
             ]
           ]
@@ -897,7 +897,7 @@ async function notifyReverseFillPrompt({
                 text:          '🎬 Upload Another Clip',
                 callback_data: `upload_clip_video_${id}_${segmentIndex}`
               },
-              { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` }
+              { text: '🔗 Submit Link', callback_data: `upload_link_clip_${id}_${segmentIndex}` }
             ]
           ]
         }
@@ -949,7 +949,7 @@ async function notifySegmentUploadRequest({
               text:          `📸 Upload Image`,
               callback_data: `upload_segment_${id}_${segmentIndex}`
             },
-            { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
+            { text: '🔗 Submit Link', callback_data: `upload_link_segment_${id}_${segmentIndex}` },
             {
               text:          `🎬 Upload Video`,
               callback_data: `upload_video_${id}_${segmentIndex}`
@@ -1039,7 +1039,7 @@ async function notifySegmentVideoForReview({
         ],
         [
           { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
-          { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
+          { text: '🔗 Submit Link', callback_data: `upload_link_segment_${id}_${segmentIndex}` },
           { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
         ]
       ]
@@ -1053,7 +1053,7 @@ async function notifySegmentVideoForReview({
         ],
         [
           { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
-          { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
+          { text: '🔗 Submit Link', callback_data: `upload_link_segment_${id}_${segmentIndex}` },
           { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
         ]
       ];
@@ -2691,11 +2691,13 @@ bot.on('callback_query', async (ctx) => {
 
   try {
     const res = await axios.post(`${WORKER_BASE_URL}/finalize-link-video`, {
-      jobId: preview.jobId,
-      segmentIndex: preview.segmentIndex,
-      tempKey: preview.tempKey,
-      type: preview.type || 'segment'
-    }, { timeout: 60000 });
+    jobId: preview.jobId,
+    segmentIndex: preview.segmentIndex,
+    tempKey: preview.tempKey,
+    type: preview.type || 'segment',
+    trimStart: 0,
+    trimEnd: preview.duration
+  }, { timeout: 60000 });
 
     delete userData.linkPreview;
     userStates.set(ctx.chat.id, userData);
@@ -2731,9 +2733,12 @@ bot.on('callback_query', async (ctx) => {
   );
 }
     if (callbackData.startsWith('upload_link_')) {
-  const [, , jobId, segmentIndex] = callbackData.split('_');
+  const parts = callbackData.split('_'); // upload, link, type, jobId, segmentIndex
+  const type = parts[2];
+  const jobId = parts[3];
+  const segmentIndex = parseInt(parts[4]);
   const userData = userStates.get(ctx.chat.id) || {};
-  userData.awaitingVideoLink = { jobId, segmentIndex: parseInt(segmentIndex) };
+  userData.awaitingVideoLink = { jobId, segmentIndex, type };
   userStates.set(ctx.chat.id, userData);
   await ctx.answerCbQuery();
   return ctx.reply('🔗 Paste the video link (TikTok, Instagram, YouTube, X, Facebook, etc.):');
@@ -4135,8 +4140,8 @@ if (
     }
   }
 
-  if (userData.awaitingVideoLink && /^https?:\/\//i.test(message.trim())) {
-  const { jobId, segmentIndex } = userData.awaitingVideoLink;
+ if (userData.awaitingVideoLink && /^https?:\/\//i.test(message.trim())) {
+  const { jobId, segmentIndex, type } = userData.awaitingVideoLink;
   const url = message.trim();
   delete userData.awaitingVideoLink;
   userStates.set(ctx.chat.id, userData);
@@ -4150,7 +4155,7 @@ if (
 
     const { tempKey, previewUrl, duration, overLimit, maxClipDuration } = res.data;
 
-    userData.linkPreview = { jobId, segmentIndex, tempKey, duration };
+    userData.linkPreview = { jobId, segmentIndex, tempKey, duration, type, maxClipDuration };
     userStates.set(ctx.chat.id, userData);
 
     await ctx.deleteMessage(waitMsg.message_id).catch(() => {});
