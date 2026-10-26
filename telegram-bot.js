@@ -845,6 +845,7 @@ if (targetDuration !== undefined) {
             ],
             [
               { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
+              { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
               { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
             ]
           ]
@@ -895,7 +896,8 @@ async function notifyReverseFillPrompt({
               {
                 text:          '🎬 Upload Another Clip',
                 callback_data: `upload_clip_video_${id}_${segmentIndex}`
-              }
+              },
+              { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` }
             ]
           ]
         }
@@ -947,6 +949,7 @@ async function notifySegmentUploadRequest({
               text:          `📸 Upload Image`,
               callback_data: `upload_segment_${id}_${segmentIndex}`
             },
+            { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
             {
               text:          `🎬 Upload Video`,
               callback_data: `upload_video_${id}_${segmentIndex}`
@@ -1036,6 +1039,7 @@ async function notifySegmentVideoForReview({
         ],
         [
           { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
+          { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
           { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
         ]
       ]
@@ -1049,6 +1053,7 @@ async function notifySegmentVideoForReview({
         ],
         [
           { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
+          { text: '🔗 Submit Link', callback_data: `upload_link_${id}_${segmentIndex}` },
           { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
         ]
       ];
@@ -2671,6 +2676,68 @@ bot.on('callback_query', async (ctx) => {
   console.log('Callback:', callbackData, '| User:', ctx.from.id);
 
   try {
+    if (callbackData.startsWith('link_use_')) {
+  const [, , jobId, segmentIndex] = callbackData.split('_');
+  const userData = userStates.get(ctx.chat.id) || {};
+  const preview = userData.linkPreview;
+
+  if (!preview || preview.jobId != jobId || preview.segmentIndex != parseInt(segmentIndex)) {
+    await ctx.answerCbQuery('Session expired, please resubmit the link.');
+    return;
+  }
+
+  await ctx.answerCbQuery();
+  await ctx.reply('⏳ Processing...');
+
+  try {
+    const res = await axios.post(`${WORKER_BASE_URL}/finalize-link-video`, {
+      jobId: preview.jobId,
+      segmentIndex: preview.segmentIndex,
+      tempKey: preview.tempKey,
+      type: preview.type || 'segment'
+    }, { timeout: 60000 });
+
+    delete userData.linkPreview;
+    userStates.set(ctx.chat.id, userData);
+
+    await ctx.reply(
+      res.data.isComplete
+        ? '✅ Clip added — segment complete!'
+        : `✅ Clip added — ${res.data.remaining?.toFixed(1)}s still needed.`
+    );
+  } catch (err) {
+    await ctx.reply(`❌ Failed to finalize: ${err.response?.data?.error || err.message}`);
+  }
+  return;
+}
+    if (callbackData.startsWith('link_trim_')) {
+  const [, , jobId, segmentIndex] = callbackData.split('_');
+  const userData = userStates.get(ctx.chat.id) || {};
+  const preview = userData.linkPreview;
+
+  if (!preview || preview.jobId != jobId || preview.segmentIndex != parseInt(segmentIndex)) {
+    await ctx.answerCbQuery('Session expired, please resubmit the link.');
+    return;
+  }
+
+  userData.awaitingLinkTrimInput = { ...preview };
+  userStates.set(ctx.chat.id, userData);
+
+  await ctx.answerCbQuery();
+  return ctx.reply(
+    `✂️ Send the trim range as \`M:SS - M:SS\` (max 3s):\n` +
+    `Example: \`0:02 - 0:05\``,
+    { parse_mode: 'Markdown' }
+  );
+}
+    if (callbackData.startsWith('upload_link_')) {
+  const [, , jobId, segmentIndex] = callbackData.split('_');
+  const userData = userStates.get(ctx.chat.id) || {};
+  userData.awaitingVideoLink = { jobId, segmentIndex: parseInt(segmentIndex) };
+  userStates.set(ctx.chat.id, userData);
+  await ctx.answerCbQuery();
+  return ctx.reply('🔗 Paste the video link (TikTok, Instagram, YouTube, X, Facebook, etc.):');
+}
     // ── Reverse fill segment ──────────────────────────────────────────
 if (callbackData.startsWith('reverse_fill_')) {
   const parts        = callbackData.split('_');
@@ -3742,6 +3809,49 @@ bot.on('photo', async (ctx) => {
     }
   }
 
+  if (userData.awaitingVideoLink && /^https?:\/\//i.test(message.trim())) {
+  const { jobId, segmentIndex } = userData.awaitingVideoLink;
+  const url = message.trim();
+  delete userData.awaitingVideoLink;
+  userStates.set(ctx.chat.id, userData);
+
+  const waitMsg = await ctx.reply('⏳ Downloading from link...');
+
+  try {
+    const res = await axios.post(`${WORKER_BASE_URL}/fetch-link-video`, {
+      jobId, segmentIndex, url
+    }, { timeout: 120000 });
+
+    const { tempKey, previewUrl, duration, overLimit, maxClipDuration } = res.data;
+
+    userData.linkPreview = { jobId, segmentIndex, tempKey, duration };
+    userStates.set(ctx.chat.id, userData);
+
+    await ctx.deleteMessage(waitMsg.message_id).catch(() => {});
+
+    await ctx.replyWithVideo(previewUrl, {
+      caption:
+        `🎬 *Preview* (${duration.toFixed(1)}s)\n\n` +
+        (overLimit
+          ? `⚠️ Exceeds fair-use limit (${maxClipDuration}s) — trimming required.`
+          : `✅ Within fair-use limit.`),
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: overLimit
+          ? [[{ text: '✂️ Trim Now', callback_data: `link_trim_${jobId}_${segmentIndex}` }]]
+          : [[
+              { text: '✅ Use As-Is', callback_data: `link_use_${jobId}_${segmentIndex}` },
+              { text: '✂️ Trim Anyway', callback_data: `link_trim_${jobId}_${segmentIndex}` }
+            ]]
+      }
+    });
+  } catch (err) {
+    await ctx.deleteMessage(waitMsg.message_id).catch(() => {});
+    return ctx.reply(`❌ Could not fetch video from that link: ${err.response?.data?.error || err.message}`);
+  }
+  return;
+}
+
   // ── Manual clip-filling mode — image clip upload ──────────────────
 if (userData.uploadingClipImage) {
   const { jobId, segmentIndex } = userData.uploadingClipImage;
@@ -4068,6 +4178,51 @@ if (
     }
   }
 
+  if (userData.awaitingLinkTrimInput) {
+  const match = message.trim().match(/^(\d+):(\d{2})\s*[-–]\s*(\d+):(\d{2})$/);
+  if (!match) {
+    return ctx.reply('⚠️ Invalid format. Use `M:SS - M:SS`, e.g. `0:02 - 0:05`', { parse_mode: 'Markdown' });
+  }
+
+  const [, m1, s1, m2, s2] = match;
+  let trimStart = parseInt(m1) * 60 + parseInt(s1);
+  let trimEnd   = parseInt(m2) * 60 + parseInt(s2);
+
+  if (trimEnd <= trimStart) {
+    return ctx.reply('⚠️ End time must be after start time.');
+  }
+
+  // Mandatory fair-use cap — worker re-enforces this regardless
+  const MAX_CLIP_DURATION = 3;
+  if (trimEnd - trimStart > MAX_CLIP_DURATION) {
+    trimEnd = trimStart + MAX_CLIP_DURATION;
+  }
+
+  const { jobId, segmentIndex, type, tempKey } = userData.awaitingLinkTrimInput;
+  delete userData.awaitingLinkTrimInput;
+  userStates.set(ctx.chat.id, userData);
+
+  await ctx.reply('⏳ Trimming and attaching...');
+
+  try {
+    const res = await axios.post(`${WORKER_BASE_URL}/finalize-link-video`, {
+      jobId, segmentIndex, tempKey, type: type || 'segment', trimStart, trimEnd
+    }, { timeout: 60000 });
+
+    delete userData.linkPreview;
+    userStates.set(ctx.chat.id, userData);
+
+    await ctx.reply(
+      res.data.isComplete
+        ? `✅ Trimmed to ${res.data.trimmedDuration?.toFixed(1) || (trimEnd - trimStart)}s — segment complete!`
+        : `✅ Trimmed clip added — ${res.data.remaining?.toFixed(1)}s still needed.`
+    );
+  } catch (err) {
+    await ctx.reply(`❌ Failed to finalize trim: ${err.response?.data?.error || err.message}`);
+  }
+  return;
+}
+  
     // ── Trim input ────────────────────────────────────────────────────
   if (userData.awaitingTrimInput) {
     const { jobId, segmentIndex } = userData.awaitingTrimInput;
