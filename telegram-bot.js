@@ -4208,20 +4208,18 @@ if (
 
     await ctx.deleteMessage(waitMsg.message_id).catch(() => {});
 
-    await ctx.replyWithVideo(previewUrl, {
+        await ctx.replyWithVideo(previewUrl, {
       caption:
         `🎬 *Preview* (${duration.toFixed(1)}s)\n\n` +
         (overLimit
-          ? `⚠️ Exceeds fair-use limit (${maxClipDuration}s) — trimming required.`
+          ? `⚠️ Exceeds fair-use limit (${maxClipDuration}s). "Use As-Is" will auto-trim to fit.`
           : `✅ Within fair-use limit.`),
       parse_mode: 'Markdown',
       reply_markup: {
-        inline_keyboard: overLimit
-          ? [[{ text: '✂️ Trim Now', callback_data: `link_trim_${jobId}_${segmentIndex}` }]]
-          : [[
-              { text: '✅ Use As-Is', callback_data: `link_use_${jobId}_${segmentIndex}` },
-              { text: '✂️ Trim Anyway', callback_data: `link_trim_${jobId}_${segmentIndex}` }
-            ]]
+        inline_keyboard: [[
+          { text: '✅ Use As-Is',   callback_data: `link_use_${jobId}_${segmentIndex}` },
+          { text: '✂️ Trim Manually', callback_data: `link_trim_${jobId}_${segmentIndex}` }
+        ]]
       }
     });
   } catch (err) {
