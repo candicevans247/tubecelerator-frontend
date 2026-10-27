@@ -1,4 +1,4 @@
-// telegram-bot.js j
+// telegram-bot.js 
 const { Telegraf, Markup } = require('telegraf');
 require('dotenv').config();
 const axios = require('axios');
@@ -845,7 +845,7 @@ if (targetDuration !== undefined) {
             ],
             [
               { text: '📸 Upload Image', callback_data: `upload_segment_${id}_${segmentIndex}` },
-              { text: '🔗 Submit Link', callback_data: `upload_link_segment_${id}_${segmentIndex}` }
+              { text: '🔗 Submit Link', callback_data: `upload_link_segment_${id}_${segmentIndex}` },
               { text: '🎬 Upload Video', callback_data: `upload_video_${id}_${segmentIndex}`   }
             ]
           ]
