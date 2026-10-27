@@ -2666,6 +2666,57 @@ bot.command('startsupport', async (ctx) => {
   }
 });
 
+async function sendClipFillResult(ctx, jobId, segmentIndex, data) {
+  const { filledDuration, targetDuration, isComplete, remaining, tooSmallToFill } = data;
+  const clipDuration = data.clipDuration ?? data.trimmedDuration ?? 0;
+
+  const pct    = Math.min(100, Math.round((filledDuration / targetDuration) * 100));
+  const filled = Math.round(pct / 10);
+  const bar    = '█'.repeat(filled) + '░'.repeat(10 - filled);
+
+  if (isComplete) {
+    await axios.post(`${WORKER_BASE_URL}/wake-up`, {
+      jobId, action: 'clip_video_uploaded', timestamp: Date.now()
+    });
+    return ctx.reply(
+      `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n${bar} ${pct}%\n` +
+      `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n\n` +
+      `✅ *Segment complete!* Moving to next...`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  if (tooSmallToFill) {
+    return ctx.reply(
+      `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n${bar} ${pct}%\n` +
+      `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+      `Remaining: *${remaining.toFixed(2)}s*\n\n` +
+      `The remaining duration is too short for a new clip.\nChoose how to fill it:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[
+          { text: '🔁 Fill with Reverse/Rewind', callback_data: `reverse_fill_${jobId}_${segmentIndex}` },
+          { text: '📸 Upload Image Anyway',       callback_data: `upload_clip_image_${jobId}_${segmentIndex}` }
+        ]] }
+      }
+    );
+  }
+
+  return ctx.reply(
+    `✅ *Clip added!* (${clipDuration.toFixed(1)}s)\n\n${bar} ${pct}%\n` +
+    `Filled: *${filledDuration.toFixed(1)}s* / *${targetDuration.toFixed(1)}s*\n` +
+    `Remaining: *${remaining.toFixed(1)}s*\n\n` +
+    `Upload another clip or image to fill the remaining time:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[
+        { text: '🎬 Upload Video Clip', callback_data: `upload_clip_video_${jobId}_${segmentIndex}` },
+        { text: '🖼️ Upload Image',       callback_data: `upload_clip_image_${jobId}_${segmentIndex}` }
+      ]] }
+    }
+  );
+}
+
 // ============================================
 // 📞 CALLBACK QUERY HANDLER
 // ============================================
@@ -2699,14 +2750,10 @@ bot.on('callback_query', async (ctx) => {
     trimEnd: preview.duration
   }, { timeout: 60000 });
 
-    delete userData.linkPreview;
+       delete userData.linkPreview;
     userStates.set(ctx.chat.id, userData);
 
-    await ctx.reply(
-      res.data.isComplete
-        ? '✅ Clip added — segment complete!'
-        : `✅ Clip added — ${res.data.remaining?.toFixed(1)}s still needed.`
-    );
+    return sendClipFillResult(ctx, jobId, segmentIndex, res.data);
   } catch (err) {
     await ctx.reply(`❌ Failed to finalize: ${err.response?.data?.error || err.message}`);
   }
@@ -4215,14 +4262,10 @@ if (
       jobId, segmentIndex, tempKey, type: type || 'segment', trimStart, trimEnd
     }, { timeout: 60000 });
 
-    delete userData.linkPreview;
+       delete userData.linkPreview;
     userStates.set(ctx.chat.id, userData);
 
-    await ctx.reply(
-      res.data.isComplete
-        ? `✅ Trimmed to ${res.data.trimmedDuration?.toFixed(1) || (trimEnd - trimStart)}s — segment complete!`
-        : `✅ Trimmed clip added — ${res.data.remaining?.toFixed(1)}s still needed.`
-    );
+    return sendClipFillResult(ctx, jobId, segmentIndex, res.data);
   } catch (err) {
     await ctx.reply(`❌ Failed to finalize trim: ${err.response?.data?.error || err.message}`);
   }
