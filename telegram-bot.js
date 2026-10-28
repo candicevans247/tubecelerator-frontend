@@ -338,7 +338,9 @@ const remaining  = remainingDuration.toFixed(2);
               text:          '🖼️ Upload Image',
               callback_data: `upload_clip_image_${id}_${segmentIndex}`
             }
-          ]]
+          ],[
+              { text: '🔗 Submit Link', callback_data: `upload_link_clip_${id}_${segmentIndex}` }
+            ]]
         }
       }
     );
@@ -2712,7 +2714,9 @@ async function sendClipFillResult(ctx, jobId, segmentIndex, data) {
       reply_markup: { inline_keyboard: [[
         { text: '🎬 Upload Video Clip', callback_data: `upload_clip_video_${jobId}_${segmentIndex}` },
         { text: '🖼️ Upload Image',       callback_data: `upload_clip_image_${jobId}_${segmentIndex}` }
-      ]] }
+      ],[
+          { text: '🔗 Submit Link', callback_data: `upload_link_clip_${jobId}_${segmentIndex}` }
+        ]] }
     }
   );
 }
@@ -2957,7 +2961,9 @@ if (callbackData.startsWith('add_more_clips_')) {
             text:          '🖼️ Upload Image',
             callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
           }
-        ]]
+        ],[
+            { text: '🔗 Submit Link', callback_data: `upload_link_clip_${jobId}_${segmentIndex}` }
+          ]]
       }
     }
   );
@@ -3627,7 +3633,9 @@ if (state?.uploadingClipVideo) {
             text:          '📸 Upload Image Anyway',
             callback_data: `upload_clip_image_${jobId}_${segmentIndex}`
           }
-        ]]
+        ],[
+            { text: '🔗 Submit Link', callback_data: `upload_link_clip_${jobId}_${segmentIndex}` }
+          ]]
       }
     }
   );
